@@ -1,0 +1,46 @@
+# ===== tajné věci — NIKDY do gitu =====
+# .env má reálný TELEGRAM_BOT_TOKEN a CHAT_ID. Šablona je .env.example (placeholdery).
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# ===== lokální data (data, ne kód) =====
+# DB se plní scrapováním; na NAS je v mountnutém volume data/.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+raw_sample.json
+
+# ===== logy z běhů =====
+*.log
+logs/
+
+# ===== python =====
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ===== nástroje / editory =====
+.vscode/
+.idea/
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,16 @@
+# Normalizace konců řádků — repo se klonuje na Windows (PC) i Linux (NAS).
+* text=auto
+
+# Shell skripty MUSÍ mít LF. S CRLF je Linux odmítne spustit
+# ("bad interpreter: /bin/bash^M") — to by rozbilo run-on-nas.sh na NASu.
+*.sh text eol=lf
+
+# Docker a konfigurace taky čistě LF (čte je Linux kontejner).
+Dockerfile text eol=lf
+*.yml text eol=lf
+.env.example text eol=lf
+
+# Binárky bez normalizace.
+*.db binary
+*.png binary
+*.jpg binary

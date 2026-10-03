@@ -1,0 +1,20 @@
+# Pro Synology Container Manager (Projekt) NEBO `docker compose` z příkazové řádky.
+#
+# Doporučeno (samoplánující se služba): INTERVAL_HOURS=3 v .env -> kontejner běží
+# pořád a scrapuje sám každé 3 h. Žádný Task Scheduler není potřeba.
+#   docker compose up -d           (nebo v Container Manageru: Project -> Create)
+#
+# Alternativa (jednorázově, řízené cronem): INTERVAL_HOURS=0 v .env a volej
+#   docker compose run --rm scraper
+
+services:
+  scraper:
+    build: .
+    image: realitni-scraper:latest
+    container_name: realitni-scraper
+    env_file: .env
+    environment:
+      - DB_PATH=data/realitky.db   # uvnitř /app/data (mountnutý volume) -> přežije restart
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped        # přežije restart NASu; ve smyčkovém režimu drží službu

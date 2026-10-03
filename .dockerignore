@@ -1,0 +1,14 @@
+# Do image nepatří: lokální prostředí, tajné věci, data ani vzorky.
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.env
+*.db
+*.db-journal
+data/
+*.log
+raw_sample.json
+.vscode/
+.idea/

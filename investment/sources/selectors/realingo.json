@@ -1,0 +1,20 @@
+{
+  "_comment": "Ověřeno živě 2026-07-24 proti realingo.cz (Next.js, __NEXT_DATA__ JSON v HTML). Změna designu webu = update tohohle souboru, ne kódu.",
+  "base_url": "https://realingo.cz",
+  "city_path_template": "/prodej_reality/{location}/nejlevnejsi/",
+  "district_path_template": "/prodej_reality/Okres_{location}/nejlevnejsi/",
+  "page_path_suffix": "{n}_strana/",
+  "next_data_script_id": "__NEXT_DATA__",
+  "category_layout_map": {
+    "FLAT1_KK": "1+kk",
+    "FLAT11": "1+1",
+    "FLAT2_KK": "2+kk",
+    "FLAT21": "2+1",
+    "FLAT3_KK": "3+kk",
+    "FLAT31": "3+1",
+    "FLAT4_KK": "4+kk",
+    "FLAT41": "4+1",
+    "FLAT5_KK": "5+kk",
+    "FLAT51": "5+1"
+  }
+}
