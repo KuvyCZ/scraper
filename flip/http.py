@@ -1,6 +1,6 @@
-"""investment/scraping_utils.py — sdílené HTTP chování pro HTML zdroje
+"""flip/http.py — sdílené HTTP chování pro HTML zdroje
 (Realingo, Bazoš, reality-sumperk.cz). Sreality má vlastní ověřené JSON API
-volání (sources/sreality.py) a tenhle modul nepoužívá.
+volání (flip/sources/sreality.py) a používá jen USER_AGENT.
 
 Poskytuje:
   RobotsChecker — stáhne a naparsuje robots.txt (VLASTNÍ parser s podporou
@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-log = logging.getLogger("investment.scraping")
+log = logging.getLogger("flip.http")
 
 # Stejný identifikující UA jako zbytek projektu (README: "rozumný rate-limit +
 # identifikující User-Agent" — NEmaskujeme se za prohlížeč, to by bylo neetické).
@@ -162,6 +162,10 @@ def polite_get(
         rate_limiter.wait()
         try:
             resp = client.get(url, headers={"User-Agent": USER_AGENT})
+            if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                # 404/403 se opakováním nespraví (neexistující kategorie, zákaz) -> hned konec
+                log.error("GET %s -> HTTP %d (bez opakování)", url, resp.status_code)
+                return None
             resp.raise_for_status()
             return resp
         except Exception as exc:  # noqa: BLE001 – retry rozhoduje voláný kód, ne typ výjimky
@@ -174,34 +178,3 @@ def polite_get(
     return None
 
 
-if __name__ == "__main__":
-    import sys
-
-    for _s in (sys.stdout, sys.stderr):
-        try:
-            _s.reconfigure(encoding="utf-8")
-        except (AttributeError, ValueError):
-            pass
-
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-
-    checker = RobotsChecker()
-    tests = [
-        ("https://reality.bazos.cz/prodam/byt/", True),
-        ("https://reality.bazos.cz/prodam/byt/100/", True),
-        ("https://reality.bazos.cz/prodam/byt/?hledat=byt", False),
-        ("https://reality.bazos.cz/prodam/byt/?hlokalita=Sumperk", False),
-        ("https://reality.bazos.cz/ad-mail.php", False),
-        ("https://realingo.cz/prodej_reality/Šumperk/nejlevnejsi/", True),
-        ("https://www.reality-sumperk.cz/prodej/byty/byty-2-1/?strana=2", True),
-        ("https://www.reality-sumperk.cz/moje-oblibene/pridat/?itemid=1", False),
-    ]
-    ok = True
-    for url, expected in tests:
-        result = checker.can_fetch(url)
-        status = "OK" if result == expected else "FAIL"
-        ok = ok and (result == expected)
-        print(status, url, "-> can_fetch =", result, "(čekám", expected, ")")
-    assert ok, "robots.txt wildcard matcher neodpovídá živým datům"
-
-    print("\n✅ investment/scraping_utils.py OK — wildcard robots.txt matching ověřeno proti živým souborům.")

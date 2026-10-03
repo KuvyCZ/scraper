@@ -1,0 +1,9 @@
+# Pinned kvuli reprodukovatelnosti a ARM wheels na Synology NAS (DS223j).
+# httpx ma jen cisté-Python zavislosti (httpcore, h11, certifi, idna, sniffio,
+# anyio) -> na ARM se nic nekompiluje, instalace je rychla a bez build toolchainu.
+httpx==0.28.1
+
+# HTML parsing pro iDnes Reality (nema verejne JSON API). beautifulsoup4 i jeho
+# zavislost soupsieve jsou cisté-Python -> na ARM se take nic nekompiluje.
+# Backend = stdlib "html.parser" (zadny lxml, ktery by se na ARM kompiloval).
+beautifulsoup4==4.12.3

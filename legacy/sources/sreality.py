@@ -217,7 +217,7 @@ class SrealitySource(Source):
         if isinstance(value, int) and 1 <= value <= 7:
             return _ENERGY_LETTERS[value - 1]
         name = cb.get("name") or ""
-        return name[0] if name[:1] in _ENERGY_LETTERS else None
+        return name[0] if name and name[0] in _ENERGY_LETTERS else None
 
     @staticmethod
     def _parse_date(value: Any) -> date | None:
