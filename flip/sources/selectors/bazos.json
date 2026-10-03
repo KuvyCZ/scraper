@@ -1,0 +1,14 @@
+{
+  "_comment": "Ověřeno živě 2026-07-24 proti reality.bazos.cz (/prodam/byt/). /prodam/dum/ NEOVĚŘENO (předpokládá se stejná struktura). robots.txt DISALLOWuje hledat=/hlokalita=/humkreis/order=/cenaod=/cenado=/rubriky=/type=/category= -> žádné URL filtrování, jen stránkování cestou a filtr u nás.",
+  "base_url": "https://reality.bazos.cz",
+  "categories": [
+    {"path": "/prodam/byt/", "kind": "byt"},
+    {"path": "/prodam/dum/", "kind": "dum"}
+  ],
+  "page_offset_step": 20,
+  "listing_block_marker": "<div class=\"inzeraty inzeratyflex\">",
+  "title_link_re": "<h2 class=nadpis><a href=\"([^\"]+)\">([^<]*)</a></h2>",
+  "price_re": "<div class=\"inzeratycena\"><b><span translate=\"no\"> ?([^<]+)</span></b></div>",
+  "location_re": "<div class=\"inzeratylok\">([^<]*)<br",
+  "description_re": "<div class=popis>(.*?)</div>"
+}

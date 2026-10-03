@@ -1,7 +1,7 @@
 {
-  "_comment": "Ověřeno živě 2026-07-24 proti www.reality-sumperk.cz. Zadáním navržené /byty/nejlevnejsi/ a /prodej/byty/obec-sumperk/ na webu NEEXISTUJÍ (404) -- reálné cesty jsou níže. Native sortBy=1 (GET) ověřeně NEMĚNÍ pořadí (formulář POSTuje na /hledani/), proto se řadí až po stažení v paměti.",
+  "_comment": "Ověřeno živě 2026-07-24 proti www.reality-sumperk.cz pro byty (dispozice-scoped kategorie; ?sortBy=1 řazení NEMĚNÍ). house_paths NEOVĚŘENO — 'python main.py check' ukáže, jestli vrací inzeráty.",
   "base_url": "https://www.reality-sumperk.cz",
-  "layout_path_map": {
+  "flat_layout_paths": {
     "1+kk": "/prodej/byty/byty-1-kk/",
     "1+1": "/prodej/byty/byty-1-1/",
     "2+kk": "/prodej/byty/byty-2-kk/",
@@ -11,6 +11,7 @@
     "4+kk": "/prodej/byty/byty-4-kk/",
     "4+1": "/prodej/byty/byty-4-1/"
   },
+  "house_paths": ["/prodej/domy/"],
   "page_query_param": "strana",
   "listing_block_marker": "<div class=\"estate\">",
   "title_link_re": "<h3><a href=\"([^\"]+)\"[^>]*>([^<]*)</a></h3>",

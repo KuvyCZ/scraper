@@ -1,9 +1,7 @@
 #!/bin/sh
-# Tohle volej ze Synology Task Scheduler (Control Panel -> Task Scheduler ->
-# Create -> Scheduled Task -> User-defined script), opakování každé 2–4 h.
-#
-# Jednorázově spustí kontejner: stáhne, oskóruje, notifikuje a skončí.
-# DB i .env se berou z adresáře tohoto skriptu (volume ./data přežije běhy).
+# Alternativa ke stále běžícímu kontejneru: volej ze Synology Task Scheduler
+# (Control Panel -> Task Scheduler -> Create -> Scheduled Task -> User-defined script),
+# opakování např. každou hodinu. Jeden průchod všemi zdroji a konec.
 #
 # Cesta k dockeru na Synology bývá /usr/local/bin/docker (jinde /usr/bin/docker).
 
@@ -15,5 +13,6 @@ DOCKER=/usr/local/bin/docker
 
 "$DOCKER" run --rm \
   --env-file .env \
+  -e DB_PATH=data/flip.db \
   -v "$(pwd)/data:/app/data" \
-  realitni-scraper:latest
+  flip-scraper:latest python main.py once

@@ -1,238 +1,106 @@
-# Realitní scraper se skórováním
+# Flip finder: Šumperk area
 
-Sleduje prodej bytů na **Sreality**, **Bezrealitky** a **iDnes** (start: Olomoucký kraj), skóruje je 0–100 podle
-toho, jak vypadají jako příležitost — **priorita = byty PŘED rekonstrukcí** — a
-posílá zajímavé nad prahem na **Telegram**. Osobní, nekomerční použití.
+Watches **flats and houses for sale** in six towns, scores each one on how good a
+**flip** it looks (buy → renovate → sell), and sends them to **Telegram**.
+Personal, non-commercial use.
 
-> Postaveno jako multi-source agregátor s jednotným schématem `Listing`. Aktivní zdroje:
-> **Sreality** (REST v1), **Bezrealitky** (GraphQL, od majitelů) a **iDnes Reality**
-> (HTML přes BeautifulSoup). Okresy/dispozice jsou napříč zdroji sjednocené → medián
-> cena/m² se pooluje.
+**Towns:** Šumperk (incl. Dolní/Horní Temenice) · Nový Malín (incl. Mladoňov, Plechy) ·
+Vikýřovice · Rapotín · Dolní Studénky (incl. Králec) · Sudkov. Edit them in `flip/towns.py`.
 
-## ⚠️ Důležité: API realita
+**Sites:** Sreality · Realingo · Bazoš · reality-sumperk.cz
 
-Veřejné `/api/cs/v2/estates` z původního zadání je **mrtvé (404)**. Scraper jede na
-ověřeném současném endpointu:
+## What you get on Telegram
 
-- **Seznam:** `https://www.sreality.cz/api/v1/estates/search` (stránkování `limit`/`offset`)
-- **Detail:** `https://www.sreality.cz/api/v1/estates/{hash_id}` (popis, stav, štítek)
-- Olomoucký kraj = `locality_region_id=8` (ověřeno z `filter_page`).
+- **🏠 Every new listing** in your towns up to the budget (default 5 M Kč), with its score.
+- **🔥** for strong ones: score ≥ 65, or an estimated flip margin ≥ 20 %.
+- **📉 Price drop** when a listing you've already seen gets ≥ 3 % cheaper, including when the
+  same property shows up cheaper on another site.
+- **First run:** instead of 50+ messages you get one summary with the top 10 (🔥 ones also in full).
+- **⚠️ A warning** if a site fails 3 runs in a row (sent once, not every run).
 
-Stav nemovitosti je **strukturované pole** `building_condition` (`8 = Před rekonstrukcí`),
-takže hlavní signál nestojí jen na keywordech v popisu.
+The same property listed on several sites is sent **once**, with "also on …" links.
 
-## Moduly
+Example:
+```
+🔥 91/100 · Flat 3+1 · Šumperk
+72 m²
+1 290 000 Kč · 17 917 Kč/m² (-46 % vs median, 11 similar in your towns)
+🔨 Před rekonstrukcí, energy G
+💰 Flip estimate: sells ~4.18M after reno · reno ~1.8M · costs ~154k → ✅ +597k (+18 %)
+   from 6 renovated listings in okres Šumperk; asking prices, not sale prices
+📉 9 % cheaper than when first seen
+📍 Šumperk, Temenická
+🔗 Sreality · also on Bazoš
+```
 
-| Soubor | Co dělá |
+## How the score works (0–100)
+
+| Signal | Weight | Meaning |
+|---|---|---|
+| Condition | 30 % | Needs renovation? Uses the site's structured condition first, then the text ("k rekonstrukci", "původní stav", umakart…); energy class F/G adds a bit |
+| Flip margin | 30 % | `price after renovation × 0.92 − price − renovation − 5 % costs`. Full points at 25 % margin |
+| Price vs market | 25 % | Price per m² vs the median of similar listings (same type, similar size). Full points at 40 % below median |
+| Motivated seller | 15 % | Price drops, months on the market, "dědictví / rychlé jednání" in the text |
+
+- **Price after renovation** = median price per m² of similar listings that are already renovated × size.
+- **Renovation cost:** 25,000 Kč/m² for flats and 30,000 Kč/m² for houses (`RENO_COST_*`).
+- **Comparison area:** your six towns first; if there are fewer than 5 similar listings there, it
+  widens to the whole okres Šumperk. Sreality stores the whole okres for exactly this reason.
+- **Missing data is never guessed.** That signal is skipped and its weight goes to the others.
+- **Serious risks halve the score and never get 🔥:** only a share of the property (podíl), an
+  auction, or an attic space. They are still shown in the message, together with co-op flats,
+  sitting tenants and easements.
+- **Excluded entirely:** small cabins (chata), new builds sold "na klíč", plots.
+- **Chalupy** are included but tagged, so you check they're livable year-round.
+
+⚠️ All prices are **asking prices**; sites don't publish what properties actually sold for.
+For houses, price per m² ignores the land. Treat the numbers as a pointer to what's worth a
+look, not as a valuation.
+
+## Run it
+
+```bash
+cp .env.example .env              # fill in TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
+pip install -r requirements.txt
+
+python main.py check              # test every site live: how many listings, which towns
+python main.py test-telegram      # test the bot can reach your chat
+python main.py once               # one pass over all sites
+python main.py                    # keep running (each site on its own interval)
+python main.py top                # best current listings from the database
+```
+
+### Synology NAS (Container Manager)
+
+1. Copy the project to the NAS, e.g. `/docker/flip-scraper`, and create a `data/` folder in it.
+2. Create `.env` from `.env.example` and fill in the Telegram token and chat id.
+3. Container Manager → **Project → Create** → point it at the folder (it finds
+   `docker-compose.yml`) → **Build**. It runs permanently and survives NAS restarts.
+4. Check it works: `docker compose run --rm scraper python main.py check`.
+
+The first Sreality run fetches details for the whole okres (~10 min). After that it only
+fetches new listings and is quick.
+
+## After deploying: please run `check`
+
+House categories on Realingo, Bazoš and reality-sumperk.cz could **not be verified live**
+when this was written (flats were verified earlier). `python main.py check` shows, per site, how
+many flats and houses it found and in which towns. If one says *"no houses at all"*, fix the
+path in `flip/sources/selectors/*.json`; no code change is needed. Realingo also logs any
+category codes it doesn't recognise.
+
+## Code map
+
+| Path | What |
 |---|---|
-| `sources/base.py` | `Listing` (jednotné schéma) + abstraktní `Source.fetch()` |
-| `sources/sreality.py` | scraper Sreality (search + detail jen pro nové), normalizace na `Listing` |
-| `sources/bezrealitky.py` | scraper Bezrealitky (GraphQL `listAdverts`, prodej od majitelů); popis i stav rovnou v seznamu |
-| `sources/idnes.py` | scraper iDnes Reality (HTML/BeautifulSoup; seznam + detail jen pro nové); okres ze SEO odkazů detailu |
-| `comps.py` | srovnatelné v okolí (GPS okruh → okres → kraj) + ARV a ekonomika rekonstrukce |
-| `database.py` | SQLite: `listings`, `price_history`, `scores`; `seen_first/last`; dedup `(source, source_id)` |
-| `scoring.py` | skóre 0–100, medián cena/m² per okres→kraj, cold-start s přerozdělením vah |
-| `notifier.py` | Telegram přes httpx (HTML), práh, denní heartbeat |
-| `config.py` | konfigurace z `.env` (žádné hardcoded hodnoty) |
-| `main.py` | orchestrace jednoho běhu |
-| `test_api.py` | průzkumný skript: stáhne vzorek a vypíše surová data |
-
-### Datový tok
-```
-sources/ (sreality…) → Listing → SQLite → scoring → Telegram (nad prahem)
-                                   ▲ cron každé 2–4 h (Synology Task Scheduler)
-```
-
-## Byty i domy + srovnávací analýza (comps)
-
-`CATEGORY_MAIN_CB=1,2` stahuje **byty i domy**. Typ drží `Listing.property_type`
-(`byt`/`dum`) a **segmentuje mediány** — bez toho by Kč/m² domů znečistilo mediány bytů.
-U domů se navíc ukládá plocha pozemku (`land_area_m2`, Sreality `estate_area`).
-
-Ke každé notifikaci nad prahem se dopočítá blok *Srovnatelné v okolí*:
-
-```
-📐 Srovnatelné v okolí (okres Přerov, 11 ks)
-   nabídky: 5 490 000 Kč (32 117 Kč/m² · rozptyl 19 910–39 375)
-   tato: 14 857 Kč/m² (-54 % vs medián)
-   medián pozemku srovnatelných: 931 m²
-   po rekonstrukci ~5 632 200 Kč (z 6 hotových)
-   ❌ odhad: −3 500 000 Kč reko → marže -918 376 Kč (-15 %)
-```
-
-- **Výběr comps:** stejný typ, plocha ±30 %, geograficky **GPS okruh 15 km → okres → kraj**
-  (u domů rozhoduje lokalita víc než plocha, proto okruh před administrativní hranicí).
-- **ARV** (cena po rekonstrukci) = medián Kč/m² srovnatelných, které už jsou *hotové*
-  („Po rekonstrukci“/„Novostavba“/„Velmi dobrý“), × plocha. Míň než 5 comps → `None` (nehádá se).
-- **Marže** = ARV × `SALE_FACTOR` − cena − (`RENOVATION_COST_PER_M2` × plocha). Počítá se jen
-  u nemovitostí, které opravu potřebují („Před rekonstrukcí“/„Špatný“/„K demolici“).
-
-> ⚠️ **Comps stojí na NABÍDKOVÝCH cenách, ne realizovaných** — portály prodejní ceny
-> nezveřejňují. Je to vodítko „kam se podívat“, ne ocenění. Proto `SALE_FACTOR` (0.92)
-> a proto se extrémní výsledky **označují varováním**: ověřeno na datech, že 203m² „byt“
-> s 47% marží byl ve skutečnosti **půdní prostor** k vybudování bytu.
-
-### Skórování (váhy)
-`stav 30 %` · `cena/m² vs medián 25 %` · `urgentní formulace 20 %` · `pokles ceny 15 %` · `doba inzerce 10 %`
-Chybí-li data pro signál → `None` a váha se přerozdělí mezi ostatní (nikdy se nehádá).
-
-## Lokální spuštění (PC)
-
-```powershell
-# 1) venv + závislosti
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-
-# 2) ověření API (stáhne vzorek do raw_sample.json)
-.\.venv\Scripts\python.exe test_api.py
-
-# 3) jednotlivé moduly mají vlastní smoke testy
-.\.venv\Scripts\python.exe -m sources.sreality
-.\.venv\Scripts\python.exe scoring.py
-.\.venv\Scripts\python.exe notifier.py
-
-# 4) celý běh nasucho (bez tokenu se vynutí dry_run, zprávy se jen logují)
-$env:MAX_LISTINGS="10"; $env:DETAIL_LIMIT="10"; $env:SCORE_THRESHOLD="20"
-.\.venv\Scripts\python.exe main.py
-```
-
-## Konfigurace
-
-Zkopíruj `.env.example` → `.env` a vyplň. Telegram bota založíš přes **@BotFather**
-(dostaneš `TELEGRAM_BOT_TOKEN`); `TELEGRAM_CHAT_ID` zjistíš tak, že botovi napíšeš a
-otevřeš `https://api.telegram.org/bot<TOKEN>/getUpdates`. Bez těchto dvou se scraper
-přepne do `dry_run` (zprávy se jen logují).
-
-Práh (`SCORE_THRESHOLD`) nastav **vysoko (70+)**, ať tě bot nezahltí; po odladění sniž.
-
-## Nasazení na Synology NAS (Container Manager)
-
-NAS běží v **UTC** a má jen 1 GB RAM — proto žádný Selenium, jen httpx. Doporučený
-režim je **samoplánující se Projekt**: kontejner běží pořád a scrapuje sám každé
-`INTERVAL_HOURS` (žádný Task Scheduler není potřeba).
-
-**1) Nahraj projekt na NAS** (File Station) do sdílené složky, např.
-`/docker/realitni-scraper`. Vytvoř v ní podsložku `data/`.
-
-**2) `.env`** — zkopíruj `.env.example` → `.env` a vyplň:
-```
-TELEGRAM_BOT_TOKEN=...    TELEGRAM_CHAT_ID=...
-INTERVAL_HOURS=3          # běh každé 3 h (smyčka)
-DB_PATH=data/realitky.db  # přežije restart (mountnutý volume)
-SCORE_THRESHOLD=70
-```
-
-**3) (Tip) Předplň DB**, ať NAS nestahuje stovky detailů: zkopíruj `realitky.db`
-vyrobenou na PC do `data/realitky.db`. Při prvním běhu pak budou všechny inzeráty
-„známé" → NAS jen rychle projede seznam a detail tahá jen u nových.
-
-**4) Container Manager → Project → Create** → název, cesta = složka projektu
-(automaticky najde `docker-compose.yml`) → **Build**. Projekt se spustí a běží jako
-stálá služba (`restart: unless-stopped` přežije i restart NASu).
-
-Logy: Container Manager → kontejner → **Logs**. První běh bez předplněné DB stáhne
-detail u všech inzerátů (~stovky × 1,6 s ≈ 20 min); další běhy už jen u nových → rychlé.
-
-> Alternativa (jednorázově přes cron): dej `INTERVAL_HOURS=0` a spouštěj
-> `run-on-nas.sh` ze **Control Panel → Task Scheduler** každé 2–4 h.
-
-## Investiční režim (Šumperk) — samostatný proces, 4 nezávislé zdroje
-
-`investment_main.py` je **oddělený modul vedle hlavního monitoringu výše** — vlastní
-config sekce v `.env` (`INVESTMENT_*`), vlastní DB (`investment.db`), vlastní Telegram
-chat (`TELEGRAM_INVESTMENT_CHAT_ID`, stejný bot token). Hlavní `main.py` se tímto
-blokem vůbec nemění a neimportuje ho.
-
-Cíl: najít podhodnocené byty 2+1/2+kk/3+1 40-70 m² v Šumperku (nebo celém okrese —
-`INVESTMENT_INCLUDE_DISTRICT=true`) jako příležitost k nájemní investici, se
-**skóre jako řazením, ne tvrdým filtrem** — posílá se cokoliv nad nízkým prahem
-(`INVESTMENT_SCORE_THRESHOLD`, výchozí 40), ať se hraniční tipy nezahodí omylem.
-
-### 4 nezávislé zdroje
-
-Každý zdroj je samostatný modul (`investment/sources/*_source.py`) s jednotným
-rozhraním `fetch_listings(config, known_ids) -> list[Listing]` a **vlastním
-intervalem** (`INVESTMENT_*_POLL_INTERVAL_MINUTES`). Pád/redesign JEDNOHO zdroje se
-odchytí a zaloguje — orchestrátor pokračuje ostatními zdroji dál. Po 3 selháních
-v kuse (`INVESTMENT_SOURCE_FAILURE_ALERT_THRESHOLD`) přijde jen **JEDNO** Telegram
-varování, ne jedno za každý neúspěšný běh.
-
-| Zdroj | Modul | Jak | Poznámka |
-|---|---|---|---|
-| Sreality | `sreality_source.py` | JSON API (`sources/sreality.py`, +`district_ids`) | okresový filtr, ověřeno živě |
-| Realingo | `realingo_source.py` | Next.js `__NEXT_DATA__` JSON v HTML | spolehlivější než CSS (hashované třídy) |
-| Bazoš | `bazos_source.py` | HTML, prosté procházení kategorie | **žádné URL filtrování** — viz robots.txt níže |
-| reality-sumperk.cz | `sumperk_source.py` | HTML, dispozice-scoped kategorie | detail jen pro nové (popis) |
-
-Selektory (CSS/regex) pro HTML zdroje jsou v `investment/sources/selectors/*.json` —
-redesign webu je pak úprava configu, ne kódu.
-
-### Ověřeno živě proti skutečným webům (ne odhad ze zadání)
-
-- **Sreality**: `locality_district_id=44` = okres Šumperk (135 inzerátů) — jediná
-  (aditivní, zpětně kompatibilní) úprava `sources/sreality.py`: nový volitelný
-  parametr `district_ids`, výchozí chování (`region_ids`) beze změny.
-- **Realingo**: lokalita jde URL cestou (`/prodej_reality/Šumperk/` nebo
-  `/Okres_Šumperk/`), řazení od nejlevnějšího = segment `/nejlevnejsi/` (ověřeno
-  vzestupné ceny), stránkování `/{N}_strana/`.
-- **Bazoš**: robots.txt **DISALLOWuje** `hledat=`, `hlokalita=`, `humkreis`,
-  `order=`, `cenaod=`, `cenado=`, `rubriky=`, `type=`, `category=` — přesně ty
-  parametry, co Bazoš normálně používá pro filtrování/třídění. Nejde tedy URL
-  vyfiltrovat na Šumperk ani seřadit od nejlevnějšího bez porušení robots.txt.
-  Scraper proto prochází **prostou, nefiltrovanou kategorii** `/prodam/byt/{offset}/`
-  (stránkování cestou, ne query stringem — to disallow nezakazuje) a lokalitu i
-  řazení řeší až po stažení, na naší straně.
-- **reality-sumperk.cz**: cesty ze zadání (`/byty/nejlevnejsi/`,
-  `/prodej/byty/obec-sumperk/`) na webu **neexistují** (404 při ověření). Reálné
-  kategorie jsou dispozice-scoped (`/prodej/byty/byty-2-1/` apod.), stránkování
-  `?strana=N`. Formulářové `sortBy=1` ("od nejlevnějšího") POSTuje na `/hledani/` —
-  ověřeno, že prosté přidání `?sortBy=1` na kategorii pořadí NEMĚNÍ, řadí se proto
-  až po stažení.
-- **robots.txt se skutečně respektuje za běhu**, ne jen jednorázově ověřilo v terminálu:
-  `investment/scraping_utils.py:RobotsChecker` má VLASTNÍ parser s podporou `*`/`$`
-  wildcard patternů — ověřeno živě, že stdlib `urllib.robotparser` tyhle patterny
-  neumí a Bazošovo `Disallow: /*hledat=` by tiše ignoroval.
-
-### Cross-source deduplikace
-
-Stejný byt na víc portálech (`investment/dedup.py`) — duplicita = cena do 2 % od
-sebe **AND** plocha do 2 m² **AND** stejná dispozice **AND** stejná obec. Nechá se
-nejlevnější verze, ostatní URL se přidají do alertu (`Also listed on: …`). Protože
-zdroje běží na nezávislých intervalech, dedup porovnává nový kandidát proti
-**živému stavu ostatních zdrojů v DB**, ne jen proti dávce z aktuálního běhu.
-
-### Bazoš — nestrukturované popisy
-
-Bazoš nemá strukturovaná pole velikosti/dispozice — parsují se regexem z
-titulku+popisu. Když se nepodaří určit ani jedno, inzerát se **přesto nechá projít**
-(velikost/dispozice se prostě nekontroluje, benefit of the doubt), jen s
-`parse_confidence: low` — poznačeno v alertu (`❓ Low parse confidence`).
-
-**Spuštění (samostatně od hlavního scraperu):**
-```powershell
-$env:INVESTMENT_ENABLED="true"
-.\.venv\Scripts\python.exe investment_main.py
-```
-Bez `INVESTMENT_ENABLED=true` skript jen zaloguje a skončí — nic se nestane omylem.
-
-Na NASu (Container Manager) běží jako **druhý, nezávislý Projekt/kontejner** vedle
-`main.py` — jiná DB (`investment.db`), jiné intervaly, žádná kolize s hlavním scraperem.
-
-⚠️ **`INVESTMENT_PRICE_MAX` (2 800 000 Kč) může být pořád nízký pro obec Šumperk
-samotnou** — 2+1 v Šumperku (ne okolí) teď běžně stojí 2,9-3,6 mil. Kč (ověřeno
-živě). Levnější nabídky (Maletín 1,9 mil., Lukavice 2,45 mil., Písařov 2,1 mil. …)
-jsou v OKOLNÍCH obcích okresu — zvaž `INVESTMENT_INCLUDE_DISTRICT=true`.
-
-## Právní / etické mantinely
-
-- Sreality ToS scraping zakazuje → drž to **osobní a nekomerční**, rozumný rate-limit (≥ 1,5 s) a identifikující User-Agent.
-- **GDPR:** neukládají se jména ani telefony prodejců — jen údaje o nemovitosti.
-
-## Další kroky (po odladění jádra)
-
-- Doladit váhy/práh podle reálných dat (skóre se loguje u všech inzerátů).
-- ✅ **Bezrealitky** přidáno (GraphQL `listAdverts`, prodej od majitelů).
-- ✅ **iDnes Reality** přidáno (HTML/BeautifulSoup, seznam + detail).
-- Využít `originalPrice` z Bezrealitky → levný **den-1 signál poklesu ceny** (teď se pokles počítá až z historie v DB).
-- **Mezi-portálová deduplikace**: stejný byt na Sreality i iDnes = 2 notifikace. Párovat přes GPS/cenu/plochu.
-- iDnes okresy: scraper má mapu zatím jen pro Olomoucký kraj (`_OKRES_NAME` v `sources/idnes.py`) — pro další kraje doplnit.
+| `main.py` | entry point and commands |
+| `flip/towns.py` | the six towns and their parts, address matching |
+| `flip/sources/*.py` | one module per site + `selectors/*.json` |
+| `flip/pipeline.py` | one run: fetch → store → dedupe → score → notify |
+| `flip/market.py` | comparable listings, median, price after renovation |
+| `flip/scoring.py` | flip score and margin estimate |
+| `flip/text.py` | reading condition, risks and house type from listing text |
+| `flip/store.py` | SQLite: listings, price history, what was sent, source health |
+| `flip/notifier.py` | Telegram messages |
+| `tests/` | `python -m unittest discover -s tests -t .` (no extra dependencies) |
+| `legacy/` | the old Olomoucký-kraj monitor, archived and not used |
