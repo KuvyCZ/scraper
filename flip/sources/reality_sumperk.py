@@ -125,7 +125,7 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                         continue
                     if lst.price is not None and lst.price > cfg.price_max:
                         continue
-                    if lst.external_id not in known_ids:
+                    if cfg.fetch_details and lst.external_id not in known_ids:
                         full = _full_description(client, lst.url, selectors, **kw)
                         if full:
                             lst.description = full
