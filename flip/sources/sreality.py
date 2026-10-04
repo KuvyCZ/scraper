@@ -129,6 +129,7 @@ def _iter_search(client: _Client, district_id: int, category: int) -> Iterator[d
         yield from results
         offset += len(results)
         total = (data.get("pagination") or {}).get("total") or 0
+        log.info("Sreality: %s %d/%d", "byty" if category == 1 else "domy", offset, total)
         if offset >= total:
             return
 
@@ -152,6 +153,11 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
 
         # detail jen pro nové, sledované obce první
         todo = sorted((x for x in listings if x.external_id not in known_ids), key=lambda x: not x.in_area)
+        if not cfg.fetch_details:
+            todo = []
+        elif todo:
+            log.info("Sreality: stahuji %d detailů (~%d min)…", min(len(todo), DETAIL_LIMIT_PER_RUN),
+                     round(min(len(todo), DETAIL_LIMIT_PER_RUN) * RATE_LIMIT_S / 60))
         for lst in todo[:DETAIL_LIMIT_PER_RUN]:
             try:
                 enrich_detail(lst, client.get(DETAIL_URL.format(hash_id=lst.external_id)))

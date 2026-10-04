@@ -78,7 +78,9 @@ def run_once(cfg: FlipConfig, notifier: Notifier) -> int:
 
 def check(cfg: FlipConfig) -> int:
     """Živé ověření zdrojů do dočasné paměťové DB — nic neukládá, nic neposílá."""
-    print(f"Checking sources against live sites (towns: {', '.join(watched_towns())}) …\n")
+    cfg.fetch_details = False   # jen seznamy: pár minut místo ~20, na ověření webu to stačí
+    print(f"Checking sources against live sites (towns: {', '.join(watched_towns())}) …")
+    print("Quick mode: listing pages only, no detail pages. Takes a few minutes in total.\n")
     all_ok = True
     for source in cfg.active_sources:
         print(f"== {DISPLAY_NAMES[source]} ==")

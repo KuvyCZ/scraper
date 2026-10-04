@@ -124,6 +124,9 @@ class FlipConfig:
     # --- úložiště --- #
     db_path: str = "flip.db"
 
+    # False = jen seznamy, bez detailů (rychlé `main.py check`); z .env se nečte
+    fetch_details: bool = True
+
     def interval_minutes(self, source: str) -> float:
         return {
             "sreality": self.sreality_interval_min,

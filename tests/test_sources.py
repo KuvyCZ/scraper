@@ -221,3 +221,24 @@ class SrealityFetchTests(unittest.TestCase):
             res = sreality.fetch_listings(config(include_houses=False), known_ids=set())
         self.assertEqual(len(res.listings), 8)                     # zbytek až příště (s detailem)
         self.assertEqual(sum(x.in_area for x in res.listings), 5)  # sledované obce dostaly detail první
+
+
+class QuickCheckTests(unittest.TestCase):
+    def test_no_details_when_disabled(self):
+        from unittest import mock
+        from tests.helpers import config
+
+        calls = []
+
+        def fake_get(self, url, params=None):
+            calls.append(url)
+            if url == sreality.SEARCH_URL:
+                return {"results": [{"hash_id": 1, "price_czk": 1, "category_main_cb": {"value": 1},
+                                     "category_sub_cb": {"name": "2+1"}, "locality": {"city": "Šumperk"}}],
+                        "pagination": {"total": 1}}
+            return {"result": {}}
+
+        with mock.patch.object(sreality._Client, "get", fake_get):
+            res = sreality.fetch_listings(config(fetch_details=False, include_houses=False), known_ids=set())
+        self.assertEqual(len(res.listings), 1)
+        self.assertEqual(calls, [sreality.SEARCH_URL])
