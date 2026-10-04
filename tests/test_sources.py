@@ -222,6 +222,28 @@ class SrealityFetchTests(unittest.TestCase):
         self.assertEqual(len(res.listings), 8)                     # zbytek až příště (s detailem)
         self.assertEqual(sum(x.in_area for x in res.listings), 5)  # sledované obce dostaly detail první
 
+    def test_detail_progress_logged(self):
+        from unittest import mock
+        from tests.helpers import config
+
+        flats = [{"hash_id": i, "price_czk": 1, "category_main_cb": {"value": 1},
+                  "category_sub_cb": {"name": "2+1"}, "locality": {"city": "Šumperk"}} for i in range(7)]
+
+        def fake_get(self, url, params=None):
+            if url == sreality.SEARCH_URL:
+                return {"results": flats if params["offset"] == 0 else [], "pagination": {"total": 7}}
+            if url.endswith("/3"):
+                raise RuntimeError("timeout")
+            return {"result": {}}
+
+        with mock.patch.object(sreality, "DETAIL_PROGRESS_EVERY", 3), \
+                mock.patch.object(sreality._Client, "get", fake_get), \
+                self.assertLogs("flip.sources.sreality", "INFO") as logs:
+            sreality.fetch_listings(config(include_houses=False), known_ids=set())
+        progress = [m for m in logs.output if "detaily" in m]
+        self.assertEqual(len(progress), 3)                         # po 3, po 6 a na konci (7)
+        self.assertIn("detaily 7/7 (1 selhalo", progress[-1])
+
 
 class QuickCheckTests(unittest.TestCase):
     def test_no_details_when_disabled(self):

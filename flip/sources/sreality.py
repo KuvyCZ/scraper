@@ -39,6 +39,7 @@ _MAIN = {1: ("byt", "byt"), 2: ("dum", "dum")}   # category_main_cb -> (kind, UR
 _ENERGY_LETTERS = "ABCDEFG"
 RATE_LIMIT_S = 1.6
 DETAIL_LIMIT_PER_RUN = 300
+DETAIL_PROGRESS_EVERY = 25
 
 
 def _slug(text: str) -> str:
@@ -158,11 +159,18 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
         elif todo:
             log.info("Sreality: stahuji %d detailů (~%d min)…", min(len(todo), DETAIL_LIMIT_PER_RUN),
                      round(min(len(todo), DETAIL_LIMIT_PER_RUN) * RATE_LIMIT_S / 60))
-        for lst in todo[:DETAIL_LIMIT_PER_RUN]:
+        batch = todo[:DETAIL_LIMIT_PER_RUN]
+        started, failed = time.monotonic(), 0
+        for i, lst in enumerate(batch, 1):
             try:
                 enrich_detail(lst, client.get(DETAIL_URL.format(hash_id=lst.external_id)))
             except Exception as exc:  # noqa: BLE001 – chybný detail nezahodí inzerát
+                failed += 1
                 log.warning("Sreality: detail %s selhal: %s", lst.external_id, exc)
+            if i % DETAIL_PROGRESS_EVERY == 0 or i == len(batch):
+                # průběh, ať dlouhý první běh nevypadá jako zaseknutý
+                log.info("Sreality: detaily %d/%d (%d selhalo, %.0f min)",
+                         i, len(batch), failed, (time.monotonic() - started) / 60)
         if len(todo) > DETAIL_LIMIT_PER_RUN:
             log.info("Sreality: %d detailů odloženo na další běh", len(todo) - DETAIL_LIMIT_PER_RUN)
             # odložené tenhle běh vůbec nevracej -> nebudou "známé" a detail se jim příště dotáhne
