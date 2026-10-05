@@ -10,5 +10,6 @@
   "title_link_re": "<h2 class=nadpis><a href=\"([^\"]+)\">([^<]*)</a></h2>",
   "price_re": "<div class=\"inzeratycena\"><b><span translate=\"no\"> ?([^<]+)</span></b></div>",
   "location_re": "<div class=\"inzeratylok\">([^<]*)<br",
+  "psc_re": "<div class=\"inzeratylok\">[^<]*<br\\s*/?>\\s*(\\d{3}\\s?\\d{2})",
   "description_re": "<div class=popis>(.*?)</div>"
 }

@@ -91,7 +91,7 @@ BAZOS_BLOCK = """<div class="inzeraty inzeratyflex">
 <h2 class=nadpis><a href="/inzerat/{id}/prodej.php">{title}</a></h2>
 <div class=popis>{desc}</div>
 <div class="inzeratycena"><b><span translate="no"> {price}</span></b></div>
-<div class="inzeratylok">{town}<br>787 01</div>
+<div class="inzeratylok">{town}<br>{psc}</div>
 </div>"""
 
 
@@ -100,14 +100,14 @@ class BazosTests(unittest.TestCase):
         self.sel = bazos.load_selectors()
 
     def page(self, *blocks):
-        return "<html>" + "".join(BAZOS_BLOCK.format(**b) for b in blocks) + "</html>"
+        return "<html>" + "".join(BAZOS_BLOCK.format(**{"psc": "787 01", **b}) for b in blocks) + "</html>"
 
     def test_flat_and_house(self):
         html = self.page(
             {"id": 1, "title": "Prodej bytu 2+1", "desc": "Byt 56 m², k rekonstrukci", "price": "1 650 000 Kč",
              "town": "Šumperk"},
             {"id": 2, "title": "Prodej RD v Sudkově", "desc": "Dům 130 m2, pozemek 1 100 m2", "price": "2 900 000 Kč",
-             "town": "Sudkov"},
+             "town": "Sudkov", "psc": "788 21"},
         )
         items = bazos.parse_page(html, self.sel)
         self.assertEqual(len(items), 2)
@@ -119,12 +119,36 @@ class BazosTests(unittest.TestCase):
 
     def test_low_confidence_and_cabin(self):
         items = bazos.parse_page(self.page(
-            {"id": 3, "title": "Prodám byt", "desc": "Volejte", "price": "Dohodou", "town": "Rapotín"},
+            {"id": 3, "title": "Prodám byt", "desc": "Volejte", "price": "Dohodou", "town": "Rapotín",
+             "psc": "788 14"},
             {"id": 4, "title": "Prodej chaty", "desc": "Chata 40 m2", "price": "500 000 Kč", "town": "Sudkov"},
         ), self.sel)
         flat = bazos.to_listing(items[0], "byt", self.sel["base_url"])
         self.assertEqual((flat.price, flat.parse_confidence), (None, "low"))
         self.assertIsNone(bazos.to_listing(items[1], "dum", self.sel["base_url"]))
+
+    def test_town_by_psc_not_name(self):
+        items = bazos.parse_page(self.page(
+            # Bazoš píše "Šumperk", ale PSČ je Vikýřovic -> Vikýřovice
+            {"id": 5, "title": "Byt 2+1", "desc": "56 m2", "price": "1 Kč", "town": "Šumperk", "psc": "788 13"},
+            # "Šumperk" s PSČ mimo sledované obce (Zábřeh) -> mimo oblast
+            {"id": 6, "title": "Byt 2+1", "desc": "56 m2", "price": "1 Kč", "town": "Šumperk", "psc": "789 01"},
+            # neznámý název, ale sledované PSČ -> projde
+            {"id": 7, "title": "Byt 2+1", "desc": "56 m2", "price": "1 Kč", "town": "Hrabišín", "psc": "78803"},
+        ), self.sel)
+        self.assertEqual([i["psc"] for i in items], ["788 13", "789 01", "78803"])
+        towns = [bazos.to_listing(i, "byt", self.sel["base_url"]).town for i in items]
+        self.assertEqual(towns, ["Vikýřovice", None, "Nový Malín"])
+        self.assertEqual(bazos.to_listing(items[0], "byt", self.sel["base_url"]).locality, "Šumperk 788 13")
+
+    def test_custom_psc_map_and_name_fallback(self):
+        items = bazos.parse_page(self.page(
+            {"id": 8, "title": "Byt", "desc": "", "price": "1 Kč", "town": "Šumperk", "psc": "789 01"},
+        ), self.sel)
+        lst = bazos.to_listing(items[0], "byt", self.sel["base_url"], {"78901": "Šumperk"})
+        self.assertEqual(lst.town, "Šumperk")
+        no_psc = dict(items[0], psc="")                            # PSČ nenalezeno -> podle názvu
+        self.assertEqual(bazos.to_listing(no_psc, "byt", self.sel["base_url"], {}).town, "Šumperk")
 
 
 SUMPERK_BLOCK = """<div class="estate">
