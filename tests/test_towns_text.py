@@ -4,7 +4,7 @@ from flip.text import (
     condition_from_text, house_subtype_from_text, is_motivated, parse_area, parse_land, parse_layout,
     parse_price, risks,
 )
-from flip.towns import match_town
+from flip.towns import DEFAULT_PSC, match_town, match_town_by_psc, parse_psc_map
 
 
 class TownTests(unittest.TestCase):
@@ -33,6 +33,24 @@ class TownTests(unittest.TestCase):
         self.assertIsNone(match_town("Šumperská, Bludov"))         # ulice pojmenovaná po městě
         self.assertIsNone(match_town(""))
         self.assertIsNone(match_town(None))
+
+
+class PscTests(unittest.TestCase):
+    def test_default_map_covers_all_towns(self):
+        from flip.towns import watched_towns
+        self.assertEqual(set(DEFAULT_PSC.values()), set(watched_towns()))
+
+    def test_match_by_psc(self):
+        self.assertEqual(match_town_by_psc("787 01", DEFAULT_PSC), "Šumperk")
+        self.assertEqual(match_town_by_psc("78821", DEFAULT_PSC), "Sudkov")
+        self.assertIsNone(match_town_by_psc("789 01", DEFAULT_PSC))   # Zábřeh
+        self.assertIsNone(match_town_by_psc("", DEFAULT_PSC))
+
+    def test_parse_env_value(self):
+        with self.assertLogs("flip.towns", "WARNING"):
+            m = parse_psc_map("787 01=Šumperk, 78793 = sumperk, 788 03=Mladoňov, 999=Šumperk, 789 01=Zábřeh")
+        self.assertEqual(m, {"78701": "Šumperk", "78793": "Šumperk", "78803": "Nový Malín"})
+        self.assertEqual(parse_psc_map(""), DEFAULT_PSC)
 
 
 class TextTests(unittest.TestCase):

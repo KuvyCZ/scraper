@@ -5,6 +5,9 @@ robots.txt DISALLOWuje `hledat=`, `hlokalita=`, `humkreis`, `order=`, `cenaod=`,
 filtrování. Proto se prochází prostá celostátní kategorie se stránkováním cestou
 (`/prodam/byt/20/`), a obec i cena se filtrují až u nás.
 
+Obec se určuje podle PSČ (`cfg.bazos_psc`), ne podle názvu: Bazoš u inzerátu
+občas ukáže "Šumperk" s PSČ jiné obce. Název se použije jen když PSČ chybí.
+
 Popisy jsou volný text -> plocha/dispozice/pozemek se čtou regexem. Když něco
 chybí, inzerát STEJNĚ projde (parse_confidence="low"), jen se to ve zprávě
 označí — soukromá nabídka se nesmí ztratit kvůli chybějícímu "m²" v textu.
@@ -29,7 +32,7 @@ from flip.config import FlipConfig
 from flip.http import RateLimiter, RobotsChecker, polite_get
 from flip.model import FetchResult, Listing, utc_now_iso
 from flip.text import EXCLUDED_HOUSE_SUBTYPES, house_subtype_from_text, parse_area, parse_land, parse_layout, parse_price
-from flip.towns import match_town
+from flip.towns import DEFAULT_PSC, match_town, match_town_by_psc
 
 log = logging.getLogger("flip.sources.bazos")
 
@@ -49,6 +52,7 @@ def parse_page(html_text: str, selectors: dict[str, Any]) -> list[dict[str, str]
     title_re = re.compile(selectors["title_link_re"])
     price_re = re.compile(selectors["price_re"])
     location_re = re.compile(selectors["location_re"])
+    psc_re = re.compile(selectors["psc_re"])
     desc_re = re.compile(selectors["description_re"], re.DOTALL)
     parsed = []
     for block in blocks:
@@ -56,17 +60,27 @@ def parse_page(html_text: str, selectors: dict[str, Any]) -> list[dict[str, str]
         if not title_m:
             continue
         price_m, loc_m, desc_m = price_re.search(block), location_re.search(block), desc_re.search(block)
+        psc_m = psc_re.search(block)
         parsed.append({
             "href": title_m.group(1),
             "title": html.unescape(title_m.group(2).strip()),
             "price_text": price_m.group(1).strip() if price_m else "",
             "location_text": html.unescape(loc_m.group(1).strip()) if loc_m else "",
+            "psc": psc_m.group(1).strip() if psc_m else "",
             "description": html.unescape(re.sub(r"<[^>]+>", " ", desc_m.group(1))).strip() if desc_m else "",
         })
     return parsed
 
 
-def to_listing(item: dict[str, str], kind: str, base_url: str) -> Listing | None:
+def town_for(item: dict[str, str], psc_map: dict[str, str]) -> str | None:
+    """Sledovaná obec podle PSČ; bez PSČ (změna webu?) záložně podle názvu."""
+    if item.get("psc"):
+        return match_town_by_psc(item["psc"], psc_map)
+    return match_town(item["location_text"])
+
+
+def to_listing(item: dict[str, str], kind: str, base_url: str,
+               psc_map: dict[str, str] | None = None) -> Listing | None:
     id_m = _ID_RE.search(item["href"])
     if not id_m:
         return None
@@ -83,7 +97,8 @@ def to_listing(item: dict[str, str], kind: str, base_url: str) -> Listing | None
     return Listing(
         source=name, external_id=id_m.group(1), url=href, kind=kind, subtype=subtype,
         price=parse_price(item["price_text"]), area_m2=area, land_m2=land,
-        town=match_town(item["location_text"]), locality=item["location_text"] or None,
+        town=town_for(item, DEFAULT_PSC if psc_map is None else psc_map),
+        locality=" ".join(x for x in (item["location_text"], item.get("psc", "")) if x) or None,
         description=text.strip() or None, scraped_at=utc_now_iso(),
         parse_confidence="high" if area is not None and subtype is not None else "low",
     )
@@ -112,7 +127,7 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                     break
                 category_raw += len(items)
                 for item in items:
-                    lst = to_listing(item, kind, selectors["base_url"])
+                    lst = to_listing(item, kind, selectors["base_url"], cfg.bazos_psc)
                     if lst is None or not lst.in_area:
                         continue
                     if lst.price is not None and lst.price > cfg.price_max:

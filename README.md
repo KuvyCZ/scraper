@@ -6,6 +6,8 @@ Personal, non-commercial use.
 
 **Towns:** Šumperk (incl. Dolní/Horní Temenice) · Nový Malín (incl. Mladoňov, Plechy) ·
 Vikýřovice · Rapotín · Dolní Studénky (incl. Králec) · Sudkov. Edit them in `flip/towns.py`.
+On Bazoš the town is picked by **postal code (PSČ)**, not by the town name; change the list
+with `BAZOS_PSC` in `.env` (see `.env.example`).
 
 **Sites:** Sreality · Realingo · Bazoš · reality-sumperk.cz
 
