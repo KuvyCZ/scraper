@@ -20,6 +20,9 @@ with `BAZOS_PSC` in `.env` (see `.env.example`).
   same property shows up cheaper on another site.
 - **First run:** instead of 50+ messages you get one summary with the top 10 (🔥 ones also in full).
 - **⚠️ A warning** if a site fails 3 runs in a row (sent once, not every run).
+- **📊 Weekly town prices:** once a week, a table of the typical asking price per m² in each town
+  (flats and houses, renovated vs. to renovate) with the change since last week. Each week is also
+  added to `data/town_prices.csv`, which opens in Excel. Change with `TOWN_REPORT_DAYS`.
 
 The same property listed on several sites is sent **once**, with "also on …" links.
 
@@ -75,6 +78,7 @@ python main.py once               # one pass over all sites
 python main.py                    # keep running (each site on its own interval)
 python main.py top                # best current listings from the database
 python main.py towns              # typical price per m² in each town
+python main.py report             # send the weekly town-price table to Telegram now
 ```
 
 ### Synology NAS (Container Manager)

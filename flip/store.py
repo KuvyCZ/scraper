@@ -75,6 +75,18 @@ CREATE TABLE IF NOT EXISTS source_health (
     last_error           TEXT
 );
 
+CREATE TABLE IF NOT EXISTS town_stats (
+    taken_at        TEXT NOT NULL,
+    town            TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    n               INTEGER NOT NULL,
+    median_ppm2     REAL,
+    median_price    REAL,
+    renovated_ppm2  REAL,
+    needs_reno_ppm2 REAL,
+    PRIMARY KEY (taken_at, town, kind)
+);
+
 CREATE INDEX IF NOT EXISTS ix_listings_market ON listings (kind, last_seen);
 CREATE INDEX IF NOT EXISTS ix_listings_town ON listings (town, kind);
 CREATE INDEX IF NOT EXISTS ix_price_history ON price_history (source, external_id, seen_at);
@@ -334,6 +346,26 @@ class Store:
                    last_notified_price = excluded.last_notified_price, score = excluded.score,
                    last_notified_at = excluded.last_notified_at""",
             (key, price, score, now, now),
+        )
+        self.conn.commit()
+
+    # ------------------------------------------------------------------ #
+    # Týdenní ceny po obcích                                             #
+    # ------------------------------------------------------------------ #
+
+    def last_town_stats(self) -> tuple[str | None, list[sqlite3.Row]]:
+        """Poslední uložený snímek (čas, řádky) — pro srovnání s minulým týdnem."""
+        row = self.conn.execute("SELECT MAX(taken_at) AS t FROM town_stats").fetchone()
+        if not row or not row["t"]:
+            return None, []
+        return row["t"], self.conn.execute("SELECT * FROM town_stats WHERE taken_at = ?", (row["t"],)).fetchall()
+
+    def save_town_stats(self, taken_at: str, rows: list[tuple[Any, ...]]) -> None:
+        """rows: (town, kind, n, median_ppm2, median_price, renovated_ppm2, needs_reno_ppm2)."""
+        self.conn.executemany(
+            """INSERT OR REPLACE INTO town_stats (taken_at, town, kind, n, median_ppm2, median_price,
+                   renovated_ppm2, needs_reno_ppm2) VALUES (?,?,?,?,?,?,?,?)""",
+            [(taken_at, *r) for r in rows],
         )
         self.conn.commit()
 

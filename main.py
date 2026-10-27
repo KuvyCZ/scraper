@@ -7,6 +7,7 @@ Použití:
                             nic neukládá a nic neposílá (použij po nasazení nebo když zdroj hlásí chyby)
   python main.py top        vypíše nejlepší aktuální nabídky z DB
   python main.py towns      typická cena za m² v každé sledované obci (z uložených inzerátů)
+  python main.py report     pošle tabulku cen po obcích na Telegram hned (jinak chodí sama 1× týdně)
   python main.py test-telegram   pošle zkušební zprávu (ověření tokenu a chat_id)
 
 Konfigurace: .env (viz .env.example). Bez TELEGRAM_BOT_TOKEN/CHAT_ID se jen loguje.
@@ -25,6 +26,7 @@ from flip.config import FlipConfig, load_config
 from flip.market import town_averages
 from flip.notifier import Notifier, czk, czk_short
 from flip.pipeline import run_source
+from flip.report import report_due, send_town_report
 from flip.sources import DISPLAY_NAMES, SOURCES
 from flip.store import Store
 from flip.towns import watched_towns
@@ -63,6 +65,13 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
             except Exception:  # noqa: BLE001 – smyčka musí přežít cokoliv
                 log.exception("%s: neočekávaná chyba, pokračuji", source)
             next_due[source] = float("inf") if intervals[source] <= 0 else time.monotonic() + intervals[source]
+        if due:
+            try:
+                with Store(cfg.db_path) as store:
+                    if report_due(store, cfg):
+                        send_town_report(store, cfg, notifier)
+            except Exception:  # noqa: BLE001 – tabulka nesmí shodit sledování
+                log.exception("týdenní tabulka selhala, pokračuji")
         if all(v == float("inf") for v in next_due.values()):
             return
         if not due:
@@ -175,6 +184,11 @@ def main(argv: list[str]) -> int:
     if command == "test-telegram":
         ok = notifier.send("✅ Flip scraper can reach this chat.")
         print("sent ✅" if ok else "failed ❌ (check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
+        return 0 if ok else 1
+    if command == "report":
+        with Store(cfg.db_path) as store:
+            ok = send_town_report(store, cfg, notifier)
+        print("sent ✅" if ok else "nothing sent (not enough listings yet, or Telegram failed)")
         return 0 if ok else 1
     if command == "once":
         return run_once(cfg, notifier)
