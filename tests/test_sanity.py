@@ -66,8 +66,17 @@ class RealingoResilienceTests(unittest.TestCase):
         html = f'<script id="__NEXT_DATA__">{json.dumps(page)}</script>'
         responses = iter([mock.Mock(text=html), None])
         with mock.patch.object(realingo, "polite_get", side_effect=lambda *a, **k: next(responses)):
-            res = realingo.fetch_listings(config(fetch_details=False), set())
+            res = realingo.fetch_listings(config(fetch_details=False, realingo_districts=["Šumperk"]), set())
         self.assertEqual([x.external_id for x in res.listings], ["1"])
+
+
+class RealingoDistrictsTests(unittest.TestCase):
+    def test_every_okres_is_visited(self):
+        urls = []
+        with mock.patch.object(realingo, "polite_get", side_effect=lambda client, url, **k: urls.append(url)):
+            realingo.fetch_listings(config(realingo_districts=["Šumperk", "Olomouc"]), set())
+        self.assertEqual(len(urls), 2)
+        self.assertIn("Okres_Olomouc", urls[1])
 
 
 class StoredDataCleanupTests(unittest.TestCase):
@@ -79,11 +88,24 @@ class StoredDataCleanupTests(unittest.TestCase):
             store.upsert(make(source="bazos", eid="plot", kind="dum", area=691.0, locality="Šumperk 787 01"))
             store.upsert(make(source="sreality", eid="ok", price=2_000_000, area=60.0))
         with Store(path) as store:
-            rent = store.get("sreality", "rent")
-            self.assertEqual((rent["town"], rent["price"]), (None, None))
+            self.assertIsNone(store.get("sreality", "rent"))
             plot = store.get("bazos", "plot")
             self.assertEqual((plot["area_m2"], plot["land_m2"]), (None, 691.0))
             self.assertEqual(store.get("sreality", "ok")["area_m2"], 60.0)
+
+    def test_towns_rematched_for_the_new_town_list(self):
+        path = os.path.join(tempfile.mkdtemp(), "flip.db")
+        with Store(path) as store:
+            store.conn.execute("PRAGMA user_version = 2")
+            store.upsert(make(source="sreality", eid="z", town=None, locality="Zábřeh, Zábřeh, Na Nové"))
+            store.upsert(make(source="sreality", eid="s", town="Sudkov", locality="Sudkov"))
+            store.upsert(make(source="bazos", eid="b", town=None, locality="Šumperk 789 01"))
+            store.mark_baseline_done("sreality")
+        with Store(path) as store:
+            self.assertFalse(store.baseline_done("sreality"))   # nové obce -> zase jedno shrnutí, ne záplava
+            self.assertEqual(store.get("sreality", "z")["town"], "Zábřeh")    # nově sledovaná obec
+            self.assertIsNone(store.get("sreality", "s")["town"])            # malá vesnice vypadla
+            self.assertEqual(store.get("bazos", "b")["town"], "Zábřeh")       # rozhoduje PSČ, ne název
 
 
 if __name__ == "__main__":

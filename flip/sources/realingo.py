@@ -12,7 +12,8 @@ Ověřeno živě (2026-07-24) pro byty:
 Neznámé hodnoty se logují (`python main.py check` je vypíše), ať jde mapování
 doplnit v selectors/realingo.json bez zásahu do kódu.
 
-Vrací jen inzeráty ze sledovaných obcí (data o trhu z okresu dodává Sreality —
+Prochází všechny okresy kraje (cfg.realingo_districts). Vrací jen inzeráty ze
+sledovaných obcí (data o trhu z kraje dodává Sreality —
 tady by se bez detailu a deduplikace jen zdvojovala).
 """
 
@@ -102,8 +103,8 @@ def normalize_item(item: dict[str, Any], selectors: dict[str, Any]) -> Listing |
     )
 
 
-def build_list_url(selectors: dict[str, Any], cfg: FlipConfig, page: int) -> str:
-    path = selectors["district_path_template"].format(location=quote(cfg.district_name))
+def build_list_url(selectors: dict[str, Any], district: str, page: int) -> str:
+    path = selectors["district_path_template"].format(location=quote(district))
     if page > 1:
         path += selectors["page_path_suffix"].format(n=page)
     return selectors["base_url"] + path
@@ -147,39 +148,40 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
     unknown: Counter[str] = Counter()
 
     with httpx.Client(timeout=20.0, follow_redirects=True) as client:
-        for page in range(1, cfg.realingo_max_pages + 1):
-            url = build_list_url(selectors, cfg, page)
-            resp = polite_get(client, url, **kw)
-            if resp is None:
-                break
-            data = parse_next_data(resp.text)
-            items = list_items(data) if data else None
-            if items is None:
-                log.error("Realingo: data stránky nenalezena na %s (redesign? zkontroluj selectors/realingo.json)", url)
-                break
-            if not items:
-                break
-            raw_count += len(items)
+        for district in cfg.realingo_districts:
+            for page in range(1, cfg.realingo_max_pages + 1):
+                url = build_list_url(selectors, district, page)
+                resp = polite_get(client, url, **kw)
+                if resp is None:
+                    break
+                data = parse_next_data(resp.text)
+                items = list_items(data) if data else None
+                if items is None:
+                    log.error("Realingo: data stránky nenalezena na %s (redesign? zkontroluj selectors/realingo.json)", url)
+                    break
+                if not items:
+                    break
+                raw_count += len(items)
 
-            page_in_budget = False
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    lst = _handle_item(item, selectors, cfg, client, known_ids, unknown, kw)
-                except Exception as exc:  # noqa: BLE001 – jeden vadný inzerát nesmí shodit celý zdroj
-                    log.warning("Realingo: inzerát %s přeskočen: %s", item.get("id"), exc)
-                    continue
-                price = item.get("price")
-                price = price.get("total") if isinstance(price, dict) else None
-                if isinstance(price, (int, float)) and price <= cfg.price_max:
-                    page_in_budget = True
-                if lst is not None:
-                    out.append(lst)
+                page_in_budget = False
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        lst = _handle_item(item, selectors, cfg, client, known_ids, unknown, kw)
+                    except Exception as exc:  # noqa: BLE001 – jeden vadný inzerát nesmí shodit celý zdroj
+                        log.warning("Realingo: inzerát %s přeskočen: %s", item.get("id"), exc)
+                        continue
+                    price = item.get("price")
+                    price = price.get("total") if isinstance(price, dict) else None
+                    if isinstance(price, (int, float)) and price <= cfg.price_max:
+                        page_in_budget = True
+                    if lst is not None:
+                        out.append(lst)
 
-            # řazeno od nejlevnějšího: celá strana nad rozpočtem -> dál už jen dražší
-            if page > 1 and not page_in_budget:
-                break
+                # řazeno od nejlevnějšího: celá strana nad rozpočtem -> dál už jen dražší
+                if page > 1 and not page_in_budget:
+                    break
 
     if unknown:
         log.info("Realingo: neznámé hodnoty (doplň do selectors/realingo.json): %s", dict(unknown.most_common(10)))

@@ -12,6 +12,7 @@ import time
 
 import httpx
 
+from flip.market import scope_label
 from flip.model import Listing
 from flip.scoring import ScoreResult
 from flip.sources import DISPLAY_NAMES
@@ -78,7 +79,7 @@ def _body(lst: Listing, res: ScoreResult) -> list[str]:
     if res.ppm2:
         price += f" · {czk(res.ppm2)}/m²"
         if res.vs_median_pct is not None:
-            where = "your towns" if res.market.scope == "area" else "okres Šumperk"
+            where = scope_label(res.market.scope, lst.town)
             price += f" ({res.vs_median_pct:+.0f} % vs median, {res.market.comps_n} similar in {where})"
     lines.append(price)
 
@@ -94,7 +95,7 @@ def _body(lst: Listing, res: ScoreResult) -> list[str]:
             f"💰 Flip estimate: sells ~{money_short(est.arv)} after reno · reno ~{money_short(est.reno_cost)}"
             f" · costs ~{money_short(est.holding_cost)} → {verdict} <b>{czk_short(est.margin)} ({est.margin_pct:+.0f} %)</b>"
         )
-        where = "your towns" if res.market.arv_scope == "area" else "okres Šumperk"
+        where = scope_label(res.market.arv_scope, lst.town)
         lines.append(f"   <i>from {res.market.arv_n} renovated listings in {where}; asking prices, not sale prices</i>")
     elif res.needs_work:
         lines.append("💰 Flip estimate: not enough renovated listings nearby yet to estimate resale price")

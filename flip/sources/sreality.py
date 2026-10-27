@@ -3,8 +3,8 @@
   SEARCH  https://www.sreality.cz/api/v1/estates/search   (limit/offset)
   DETAIL  https://www.sreality.cz/api/v1/estates/{hash_id} (popis, stav, štítek, pozemek)
 
-Stahuje byty (category_main_cb=1) i domy (2) z CELÉHO okresu Šumperk
-(locality_district_id=44, ověřeno živě) a vrací všechny — i mimo 6 obcí a nad
+Stahuje byty (category_main_cb=1) i domy (2) z CELÉHO Olomouckého kraje
+(locality_region_id, viz config) a vrací všechny — i mimo sledované obce a nad
 rozpočtem. Ty slouží jako data o trhu (medián, ARV); alertuje se jen to, co je
 ve sledovaných obcích a v rozpočtu (rozhoduje pipeline).
 
@@ -116,12 +116,12 @@ class _Client:
         self.http.close()
 
 
-def _iter_search(client: _Client, district_id: int, category: int) -> Iterator[dict[str, Any]]:
+def _iter_search(client: _Client, region_id: int, category: int) -> Iterator[dict[str, Any]]:
     offset = 0
     while True:
         data = client.get(SEARCH_URL, {
             "category_main_cb": category, "category_type_cb": 1,
-            "locality_district_id": district_id, "limit": 100, "offset": offset,
+            "locality_region_id": region_id, "limit": 100, "offset": offset,
         })
         results = data.get("results") or []
         if not results:
@@ -139,9 +139,10 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
     client = _Client()
     raw_count = 0
     listings: list[Listing] = []
+    complete = True
     try:
         for category in categories:
-            for estate in _iter_search(client, cfg.district_id, category):
+            for estate in _iter_search(client, cfg.sreality_region_id, category):
                 raw_count += 1
                 try:
                     lst = normalize_search(estate)
@@ -167,10 +168,14 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
             log.info("Sreality: %d detailů odloženo na další běh", len(todo) - DETAIL_LIMIT_PER_RUN)
             # odložené tenhle běh vůbec nevracej -> nebudou "známé" a detail se jim příště dotáhne
             deferred = {x.key for x in todo[DETAIL_LIMIT_PER_RUN:]}
+            complete = False
             listings = [x for x in listings if x.key not in deferred]
     finally:
         client.close()
 
     in_area = sum(1 for x in listings if x.in_area)
-    log.info("Sreality: %d inzerátů v okrese, %d ve sledovaných obcích", len(listings), in_area)
-    return FetchResult(listings, raw_count)
+    log.info("Sreality: %d inzerátů v kraji, %d ve sledovaných obcích", len(listings), in_area)
+    if listings and not in_area:
+        log.error("Sreality: žádný inzerát ze sledovaných obcí — SREALITY_REGION_ID=%d je nejspíš špatně",
+                  cfg.sreality_region_id)
+    return FetchResult(listings, raw_count, complete)

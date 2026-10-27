@@ -10,7 +10,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 
-from flip.towns import DEFAULT_PSC, parse_psc_map
+from flip.towns import DEFAULT_PSC, OKRESY, parse_psc_map
 
 log = logging.getLogger("flip.config")
 
@@ -97,8 +97,11 @@ class FlipConfig:
     source_failure_alert_threshold: int = 3
 
     # --- lokalita --- #
-    district_id: int = 44             # Sreality locality_district_id: 44 = okres Šumperk (ověřeno)
-    district_name: str = "Šumperk"    # Realingo: /prodej_reality/Okres_{district_name}/
+    # Sreality locality_region_id: 8 = Olomoucký kraj (NEOVĚŘENO živě; okres Šumperk = district 44 ověřen).
+    # Když `main.py check` ukáže 0 inzerátů ve sledovaných obcích, číslo je špatně.
+    sreality_region_id: int = 8
+    # Realingo: /prodej_reality/Okres_{okres}/ pro každý okres kraje
+    realingo_districts: list[str] = field(default_factory=lambda: list(OKRESY))
     # Bazoš: PSČ -> obec; inzerát projde podle PSČ, ne podle názvu obce (BAZOS_PSC v .env)
     bazos_psc: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_PSC))
 
@@ -171,8 +174,8 @@ def load_config(env_file: str = ".env") -> FlipConfig:
         bazos_max_pages=_get_int("BAZOS_MAX_PAGES", 25),
         reality_sumperk_max_pages=_get_int("REALITY_SUMPERK_MAX_PAGES", 5),
         source_failure_alert_threshold=_get_int("SOURCE_FAILURE_ALERT_THRESHOLD", 3),
-        district_id=_get_int("DISTRICT_ID", 44),
-        district_name=_get("DISTRICT_NAME", "Šumperk"),
+        sreality_region_id=_get_int("SREALITY_REGION_ID", 8),
+        realingo_districts=_get_list("REALINGO_DISTRICTS", list(OKRESY)),
         bazos_psc=parse_psc_map(_get("BAZOS_PSC")),
         price_max=_get_int("PRICE_MAX", 5_000_000),
         area_min=_get_float("AREA_MIN", 0.0),

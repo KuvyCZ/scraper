@@ -1,4 +1,4 @@
-"""main.py — hledač flipů: byty a domy v Šumperku a okolí → Telegram.
+"""main.py — hledač flipů: byty a domy ve větších obcích Olomouckého kraje → Telegram.
 
 Použití:
   python main.py            běží pořád, každý zdroj ve vlastním intervalu (výchozí, Docker)
@@ -6,6 +6,7 @@ Použití:
   python main.py check      ověří každý zdroj proti živému webu: kolik najde, v jakých obcích;
                             nic neukládá a nic neposílá (použij po nasazení nebo když zdroj hlásí chyby)
   python main.py top        vypíše nejlepší aktuální nabídky z DB
+  python main.py towns      typická cena za m² v každé sledované obci (z uložených inzerátů)
   python main.py test-telegram   pošle zkušební zprávu (ověření tokenu a chat_id)
 
 Konfigurace: .env (viz .env.example). Bez TELEGRAM_BOT_TOKEN/CHAT_ID se jen loguje.
@@ -21,6 +22,7 @@ import time
 from collections import Counter
 
 from flip.config import FlipConfig, load_config
+from flip.market import town_averages
 from flip.notifier import Notifier, czk, czk_short
 from flip.pipeline import run_source
 from flip.sources import DISPLAY_NAMES, SOURCES
@@ -79,7 +81,7 @@ def run_once(cfg: FlipConfig, notifier: Notifier) -> int:
 def check(cfg: FlipConfig) -> int:
     """Živé ověření zdrojů do dočasné paměťové DB — nic neukládá, nic neposílá."""
     cfg.fetch_details = False   # jen seznamy: pár minut místo ~20, na ověření webu to stačí
-    print(f"Checking sources against live sites (towns: {', '.join(watched_towns())}) …")
+    print(f"Checking sources against live sites ({len(watched_towns())} towns in Olomoucký kraj) …")
     print("Quick mode: listing pages only, no detail pages. Takes a few minutes in total.\n")
     all_ok = True
     for source in cfg.active_sources:
@@ -99,7 +101,7 @@ def check(cfg: FlipConfig) -> int:
               f"{len(in_area)} in your towns")
         by = Counter((x.town, x.kind) for x in in_area)
         for (town, kind), n in sorted(by.items()):
-            print(f"      {town:15} {'flats ' if kind == 'byt' else 'houses'} {n}")
+            print(f"      {town:20} {'flats ' if kind == 'byt' else 'houses'} {n}")
         for kind in ("byt", "dum"):
             if cfg.wants_kind(kind) and not any(x.kind == kind for x in result.listings):
                 print(f"   ⚠️  no {'flats' if kind == 'byt' else 'houses'} at all — category path may be wrong")
@@ -136,6 +138,29 @@ def top(cfg: FlipConfig, limit: int = 20) -> int:
     return 0
 
 
+def towns(cfg: FlipConfig) -> int:
+    """Průměr (medián) Kč/m² pro každou obec — s čím se inzeráty srovnávají."""
+    with Store(cfg.db_path) as store:
+        rows = store.market_rows(kind="byt", window_days=cfg.market_window_days, in_area_only=True)
+        rows += store.market_rows(kind="dum", window_days=cfg.market_window_days, in_area_only=True)
+    averages = town_averages(rows)
+    if not averages:
+        print("Not enough listings yet — let it run a few hours first.")
+        return 0
+    for kind, title in (("byt", "FLATS"), ("dum", "HOUSES")):
+        items = [a for a in averages if a.kind == kind]
+        if not items:
+            continue
+        print(f"\n{title} — typical asking price per m² (last {cfg.market_window_days} days)")
+        print(f"   {'town':20} {'listings':>8} {'per m²':>12} {'renovated':>12} {'to renovate':>12}")
+        for a in items:
+            reno = czk(a.renovated_ppm2) if a.renovated_ppm2 else "–"
+            raw = czk(a.needs_reno_ppm2) if a.needs_reno_ppm2 else "–"
+            print(f"   {a.town:20} {a.n:>8} {czk(a.median_ppm2):>12} {reno:>12} {raw:>12}")
+    print("\nTowns with fewer than 3 listings are left out. These are asking prices, not sale prices.")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     setup_logging()
     cfg = load_config()
@@ -144,6 +169,8 @@ def main(argv: list[str]) -> int:
         return check(cfg)
     if command == "top":
         return top(cfg)
+    if command == "towns":
+        return towns(cfg)
     notifier = Notifier(cfg.telegram_token, cfg.telegram_chat_id, dry_run=cfg.dry_run)
     if command == "test-telegram":
         ok = notifier.send("✅ Flip scraper can reach this chat.")

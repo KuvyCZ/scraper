@@ -15,22 +15,23 @@ class TownTests(unittest.TestCase):
         self.assertEqual(match_town("RAPOTÍN"), "Rapotín")
 
     def test_town_parts(self):
-        self.assertEqual(match_town("Králec"), "Dolní Studénky")
+        self.assertEqual(match_town("Holice"), "Olomouc")
         self.assertEqual(match_town("Mladoňov"), "Nový Malín")
         self.assertEqual(match_town("Šumperk - Horní Temenice"), "Šumperk")
         self.assertEqual(match_town("Temenická, Šumperk"), "Šumperk")
 
     def test_address_formats(self):
         self.assertEqual(match_town("Školní 12, Rapotín"), "Rapotín")
-        self.assertEqual(match_town("Sudkov, 788 21"), "Sudkov")
+        self.assertEqual(match_town("Zábřeh, 789 01"), "Zábřeh")
         self.assertEqual(match_town("Šumperk 787 01"), "Šumperk")
-        self.assertEqual(match_town(None, "Dolní Studénky"), "Dolní Studénky")
+        self.assertEqual(match_town(None, "Lipová-lázně"), "Lipová-lázně")
 
     def test_not_watched(self):
-        self.assertIsNone(match_town("Bludov, okres Šumperk"))     # okres není obec
-        self.assertIsNone(match_town("Horní Studénky"))           # podobné jméno
-        self.assertIsNone(match_town("Zábřeh"))
-        self.assertIsNone(match_town("Šumperská, Bludov"))         # ulice pojmenovaná po městě
+        self.assertIsNone(match_town("Hrabišín, okres Šumperk"))   # okres není obec, malá vesnice ne
+        self.assertIsNone(match_town("Horní Studénky"))           # malá vesnice
+        self.assertIsNone(match_town("Sudkov"))                   # pod ~2 000 obyvatel
+        self.assertIsNone(match_town("Brno"))
+        self.assertIsNone(match_town("Šumperská, Hrabišín"))       # ulice pojmenovaná po městě
         self.assertIsNone(match_town(""))
         self.assertIsNone(match_town(None))
 
@@ -42,15 +43,23 @@ class PscTests(unittest.TestCase):
 
     def test_match_by_psc(self):
         self.assertEqual(match_town_by_psc("787 01", DEFAULT_PSC), "Šumperk")
-        self.assertEqual(match_town_by_psc("78821", DEFAULT_PSC), "Sudkov")
-        self.assertIsNone(match_town_by_psc("789 01", DEFAULT_PSC))   # Zábřeh
+        self.assertEqual(match_town_by_psc("79601", DEFAULT_PSC), "Prostějov")
+        self.assertIsNone(match_town_by_psc("789 72", DEFAULT_PSC))   # Bohuslavice/Dubicko
         self.assertIsNone(match_town_by_psc("", DEFAULT_PSC))
 
     def test_parse_env_value(self):
         with self.assertLogs("flip.towns", "WARNING"):
-            m = parse_psc_map("787 01=Šumperk, 78793 = sumperk, 788 03=Mladoňov, 999=Šumperk, 789 01=Zábřeh")
+            m = parse_psc_map("787 01=Šumperk, 78793 = sumperk, 788 03=Mladoňov, 999=Šumperk, 789 72=Bohuslavice")
         self.assertEqual(m, {"78701": "Šumperk", "78793": "Šumperk", "78803": "Nový Malín"})
         self.assertEqual(parse_psc_map(""), DEFAULT_PSC)
+
+
+class PscFitTests(unittest.TestCase):
+    def test_psc_prefix_check(self):
+        from flip.towns import psc_fits_town
+        self.assertTrue(psc_fits_town("779 11", "Olomouc"))       # další PSČ velkého města
+        self.assertFalse(psc_fits_town("789 72", "Šumperk"))      # Bohuslavice psané jako Šumperk
+        self.assertFalse(psc_fits_town("787 01", None))
 
 
 class TextTests(unittest.TestCase):

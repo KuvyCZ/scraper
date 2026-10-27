@@ -1,11 +1,12 @@
-# Flip finder: Šumperk area
+# Flip finder: Olomoucký kraj
 
-Watches **flats and houses for sale** in six towns, scores each one on how good a
+Watches **flats and houses for sale** in the bigger towns of Olomoucký kraj, scores each one on how good a
 **flip** it looks (buy → renovate → sell), and sends them to **Telegram**.
 Personal, non-commercial use.
 
-**Towns:** Šumperk (incl. Dolní/Horní Temenice) · Nový Malín (incl. Mladoňov, Plechy) ·
-Vikýřovice · Rapotín · Dolní Studénky (incl. Králec) · Sudkov. Edit them in `flip/towns.py`.
+**Towns:** about 40 towns of roughly 2,000+ people in all five okresy (Olomouc, Prostějov,
+Přerov, Šumperk, Jeseník); small villages are left out. The list, with approximate
+populations, is in `flip/towns.py` — add or remove a town there.
 On Bazoš the town is picked by **postal code (PSČ)**, not by the town name; change the list
 with `BAZOS_PSC` in `.env` (see `.env.example`).
 
@@ -26,7 +27,7 @@ Example:
 ```
 🔥 91/100 · Flat 3+1 · Šumperk
 72 m²
-1 290 000 Kč · 17 917 Kč/m² (-46 % vs median, 11 similar in your towns)
+1 290 000 Kč · 17 917 Kč/m² (-46 % vs median, 11 similar in Šumperk)
 🔨 Před rekonstrukcí, energy G
 💰 Flip estimate: sells ~4.18M after reno · reno ~1.8M · costs ~154k → ✅ +597k (+18 %)
    from 6 renovated listings in okres Šumperk; asking prices, not sale prices
@@ -46,8 +47,11 @@ Example:
 
 - **Price after renovation** = median price per m² of similar listings that are already renovated × size.
 - **Renovation cost:** 25,000 Kč/m² for flats and 30,000 Kč/m² for houses (`RENO_COST_*`).
-- **Comparison area:** your six towns first; if there are fewer than 5 similar listings there, it
-  widens to the whole okres Šumperk. Sreality stores the whole okres for exactly this reason.
+- **Comparison area:** the listing's **own town** first (Olomouc and a village have very different
+  prices). If there are fewer than 5 similar listings there, it widens to the watched towns of the
+  same okres, then to the whole kraj. Sreality stores the whole kraj for exactly this reason.
+- **`python main.py towns`** prints each town's typical price per m² (flats and houses), plus
+  renovated vs. to-renovate where there are enough listings — a quick view of where flips can work.
 - **Missing data is never guessed.** That signal is skipped and its weight goes to the others.
 - **Serious risks halve the score and never get 🔥:** only a share of the property (podíl), an
   auction, or an attic space. They are still shown in the message, together with co-op flats,
@@ -70,6 +74,7 @@ python main.py test-telegram      # test the bot can reach your chat
 python main.py once               # one pass over all sites
 python main.py                    # keep running (each site on its own interval)
 python main.py top                # best current listings from the database
+python main.py towns              # typical price per m² in each town
 ```
 
 ### Synology NAS (Container Manager)

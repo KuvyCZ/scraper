@@ -138,7 +138,11 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
 
     # 4) první běh: jedno shrnutí místo záplavy
     if stats.baseline:
-        if _send_baseline(source, baseline_items, store, notifier, cfg):
+        if not result.complete:
+            # část inzerátů ještě čeká na detail -> shrnutí až z úplného seznamu (jinak by
+            # se odložené po dokončení prvního běhu poslaly každý zvlášť)
+            log.info("%s: první běh ještě není kompletní, shrnutí pošlu, až bude", source)
+        elif _send_baseline(source, baseline_items, store, notifier, cfg):
             store.mark_baseline_done(source)
 
     log.info(

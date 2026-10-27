@@ -23,6 +23,7 @@ from typing import Any, Iterable
 from flip.model import Listing
 from flip.sanity import FLAT_AREA_RANGE, HOUSE_AREA_MAX, MIN_LAND_M2, MIN_SALE_PRICE, RENTAL_PRICE_MAX
 from flip.text import looks_like_rental
+from flip.towns import _PSC_RE, DEFAULT_PSC, match_town, match_town_by_psc, normalize_psc, psc_fits_town
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS listings (
@@ -120,6 +121,29 @@ class Store:
         if version < 2:
             self._clean_stored_values()
             self.conn.execute("PRAGMA user_version = 2")
+        if version < 3:
+            self._rematch_towns()
+            # nové obce = stovky "nových" inzerátů naráz -> místo záplavy zpráv znovu jedno shrnutí
+            self.conn.execute("UPDATE source_health SET baseline_done = 0")
+            self.conn.execute("PRAGMA user_version = 3")
+
+    def _rematch_towns(self) -> None:
+        """Seznam sledovaných obcí se změnil (6 obcí -> větší obce kraje): obec
+        uložených řádků znovu z lokality. Bazoš jen s PSČ (bez něj se nedá ověřit)."""
+        rows = self.conn.execute("SELECT source, external_id, locality FROM listings").fetchall()
+        for r in rows:
+            loc = r["locality"]
+            if r["source"] == "bazos":
+                psc = normalize_psc(loc)
+                name = _PSC_RE.sub(" ", loc or "").strip()
+                town = match_town_by_psc(psc, DEFAULT_PSC) if psc else None
+                if psc and town is None:
+                    named = match_town(name)
+                    town = named if psc_fits_town(psc, named) else None
+            else:
+                town = match_town(loc)
+            self.conn.execute("UPDATE listings SET town = ? WHERE source = ? AND external_id = ?",
+                              (town, r["source"], r["external_id"]))
 
     def _clean_stored_values(self) -> None:
         """Stejná pravidla jako flip/sanity.py pro řádky uložené před jejich zavedením
@@ -129,11 +153,10 @@ class Store:
             (RENTAL_PRICE_MAX,),
         ).fetchall()
         for r in rows:
-            if looks_like_rental(r["description"]):     # pronájem: pryč z oblasti i z mediánů
-                self.conn.execute(
-                    "UPDATE listings SET town = NULL, price = NULL WHERE source = ? AND external_id = ?",
-                    (r["source"], r["external_id"]),
-                )
+            if looks_like_rental(r["description"]):     # pronájem není prodej -> pryč úplně
+                for table in ("listings", "price_history"):
+                    self.conn.execute(f"DELETE FROM {table} WHERE source = ? AND external_id = ?",
+                                      (r["source"], r["external_id"]))
         self.conn.executescript(f"""
             UPDATE listings SET price = NULL WHERE price < {MIN_SALE_PRICE};
             UPDATE listings SET land_m2 = NULL WHERE land_m2 < {MIN_LAND_M2};
@@ -287,7 +310,7 @@ class Store:
     def market_rows(self, *, kind: str, window_days: int, in_area_only: bool) -> list[sqlite3.Row]:
         """Inzeráty pro mediány: daný typ, viděné v posledních N dnech, bez duplicit."""
         since = iso(self.now() - timedelta(days=window_days))
-        sql = """SELECT source, external_id, price, area_m2, land_m2, building_condition, description, town
+        sql = """SELECT source, external_id, kind, price, area_m2, land_m2, building_condition, description, town
                  FROM listings
                  WHERE kind = ? AND last_seen >= ? AND dup_of IS NULL
                    AND price IS NOT NULL AND price > 0 AND area_m2 IS NOT NULL AND area_m2 > 0"""

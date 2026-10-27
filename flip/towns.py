@@ -1,9 +1,9 @@
 """flip/towns.py — sledované obce a rozpoznání obce z textu lokality.
 
-Sledujeme 6 obcí okresu Šumperk. Každá může mít v inzerátu místo názvu obce
-uvedenou ČÁST OBCE (např. "Králec" = Dolní Studénky) — proto aliasy.
-Části obcí: Nový Malín (Mladoňov, Plechy), Dolní Studénky (Králec),
-Šumperk (Dolní a Horní Temenice). Vikýřovice, Rapotín a Sudkov části nemají.
+Sledujeme větší obce Olomouckého kraje (zhruba od 2 000 obyvatel), malé vesnice
+ne. Seznam je ručně psaný níže (TOWN_INFO) — počty obyvatel jsou PŘIBLIŽNÉ (slouží
+jen k orientaci), obec přidáš/ubereš úpravou seznamu. Každá obec může mít v
+inzerátu místo názvu obce uvedenou ČÁST OBCE (např. "Holice" = Olomouc) — proto aliasy.
 
 Shoda je PŘESNÁ na celý segment adresy (rozděleno čárkou/pomlčkou), ne podřetězec:
   * "Bludov, okres Šumperk" NESMÍ projít jako Šumperk (proto ne podřetězec),
@@ -15,30 +15,93 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
+from dataclasses import dataclass
 
 log = logging.getLogger("flip.towns")
 
-# kanonický název obce -> části obce / jiné zápisy, které k ní patří
-TOWNS: dict[str, tuple[str, ...]] = {
-    "Šumperk": ("Dolní Temenice", "Horní Temenice", "Temenice"),
-    "Nový Malín": ("Mladoňov", "Plechy"),
-    "Vikýřovice": (),
-    "Rapotín": (),
-    "Dolní Studénky": ("Králec",),
-    "Sudkov": (),
+OKRESY = ("Jeseník", "Olomouc", "Prostějov", "Přerov", "Šumperk")
+
+
+@dataclass(frozen=True)
+class Town:
+    okres: str
+    population: int                   # přibližně, jen orientačně
+    psc: tuple[str, ...]              # hlavní PSČ (Bazoš); první 3 číslice slouží i jako kontrola názvu
+    aliases: tuple[str, ...] = ()     # části obce / jiné zápisy
+
+
+# ⚠️ Počty obyvatel a PSČ jsou z paměti, ne z oficiálního zdroje (ten nebyl z cloudu
+# dostupný). Pokud `python main.py check` hlásí Bazoš PSČ, které nesedí, oprav je tady.
+TOWN_INFO: dict[str, Town] = {
+    # --- okres Olomouc ---
+    "Olomouc": Town("Olomouc", 100_000, ("779 00", "772 00", "783 71"), (
+        "Nová Ulice", "Hodolany", "Neředín", "Slavonín", "Nemilany", "Holice", "Chomoutov", "Černovír",
+        "Hejčín", "Řepčín", "Lazce", "Klášterní Hradisko", "Nové Sady", "Povel", "Pavlovičky", "Bělidla",
+        "Chválkovice", "Droždín", "Lošov", "Radíkov", "Svatý Kopeček", "Týneček", "Topolany", "Nedvězí")),
+    "Šternberk": Town("Olomouc", 13_500, ("785 01",)),
+    "Uničov": Town("Olomouc", 11_000, ("783 91",)),
+    "Litovel": Town("Olomouc", 9_800, ("784 01",)),
+    "Hlubočky": Town("Olomouc", 4_000, ("783 61",), ("Mariánské Údolí", "Hrubá Voda")),
+    "Velká Bystřice": Town("Olomouc", 3_400, ("783 53",)),
+    "Bohuňovice": Town("Olomouc", 3_400, ("783 14",)),
+    "Štěpánov": Town("Olomouc", 3_400, ("783 13",)),
+    "Velký Týnec": Town("Olomouc", 3_000, ("783 72",)),
+    "Moravský Beroun": Town("Olomouc", 3_000, ("793 05",)),
+    "Dolany": Town("Olomouc", 2_800, ("783 16",)),
+    "Horka nad Moravou": Town("Olomouc", 2_500, ("783 35",)),
+    "Náměšť na Hané": Town("Olomouc", 2_000, ("783 44",)),
+    # --- okres Prostějov ---
+    "Prostějov": Town("Prostějov", 43_000, ("796 01", "796 04"), (
+        "Krasice", "Čechovice", "Čechůvky", "Domamyslice", "Vrahovice", "Žešov")),
+    "Kostelec na Hané": Town("Prostějov", 2_900, ("798 41",)),
+    "Konice": Town("Prostějov", 2_800, ("798 52",)),
+    "Plumlov": Town("Prostějov", 2_400, ("798 03",)),
+    "Němčice nad Hanou": Town("Prostějov", 2_000, ("798 27",)),
+    # --- okres Přerov ---
+    "Přerov": Town("Přerov", 41_000, ("750 02", "751 24"), (
+        "Předmostí", "Lověšice", "Kozlovice", "Henčlov", "Dluhonice", "Žeravice", "Vinary", "Čekyně",
+        "Penčice", "Popovice", "Lýsky", "Újezdec")),
+    "Hranice": Town("Přerov", 18_000, ("753 01",), ("Drahotuše", "Slavíč", "Velká", "Lhotka")),
+    "Lipník nad Bečvou": Town("Přerov", 8_000, ("751 31",)),
+    "Kojetín": Town("Přerov", 6_000, ("752 01",)),
+    "Tovačov": Town("Přerov", 2_300, ("751 01",)),
+    "Brodek u Přerova": Town("Přerov", 2_000, ("751 03",)),
+    # --- okres Šumperk ---
+    "Šumperk": Town("Šumperk", 25_500, ("787 01",), ("Dolní Temenice", "Horní Temenice", "Temenice")),
+    "Zábřeh": Town("Šumperk", 13_500, ("789 01",)),
+    "Mohelnice": Town("Šumperk", 9_000, ("789 85",)),
+    "Postřelmov": Town("Šumperk", 3_300, ("789 69",)),
+    "Libina": Town("Šumperk", 3_300, ("788 05",)),
+    "Bludov": Town("Šumperk", 3_100, ("789 61",)),
+    "Nový Malín": Town("Šumperk", 3_100, ("788 03",), ("Mladoňov", "Plechy")),
+    "Loštice": Town("Šumperk", 3_000, ("789 83",)),
+    "Rapotín": Town("Šumperk", 3_000, ("788 14",)),
+    "Hanušovice": Town("Šumperk", 2_900, ("788 33",)),
+    "Velké Losiny": Town("Šumperk", 2_700, ("788 15",)),
+    "Vikýřovice": Town("Šumperk", 2_500, ("788 13",)),
+    "Štíty": Town("Šumperk", 2_000, ("789 91",)),
+    # --- okres Jeseník ---
+    "Jeseník": Town("Jeseník", 10_500, ("790 01",), ("Bukovice", "Dětřichov", "Seč")),
+    "Zlaté Hory": Town("Jeseník", 3_600, ("793 76",)),
+    "Javorník": Town("Jeseník", 2_600, ("790 70",)),
+    "Mikulovice": Town("Jeseník", 2_400, ("790 84",)),
+    "Lipová-lázně": Town("Jeseník", 2_300, ("790 61",), ("Lipová lázně",)),
 }
 
+# kanonický název obce -> části obce / jiné zápisy, které k ní patří
+TOWNS: dict[str, tuple[str, ...]] = {name: t.aliases for name, t in TOWN_INFO.items()}
+
+
+def okres_of(town: str | None) -> str | None:
+    info = TOWN_INFO.get(town) if town else None
+    return info.okres if info else None
+
+
 # Bazoš: obec se pozná podle PSČ, ne podle názvu (Bazoš u inzerátu občas ukáže
-# "Šumperk" s PSČ jiné obce). PSČ -> kanonický název obce. Jedno PSČ může pokrývat
-# i sousední obce (788 14 = Rapotín i Petrov nad Desnou) — ty pak projdou jako tahle obec.
+# "Šumperk" s PSČ jiné obce). PSČ -> kanonický název obce.
 # Přepíše se v .env proměnnou BAZOS_PSC (viz parse_psc_map).
 DEFAULT_PSC: dict[str, str] = {
-    "78701": "Šumperk",
-    "78803": "Nový Malín",
-    "78813": "Vikýřovice",
-    "78814": "Rapotín",
-    "78820": "Dolní Studénky",
-    "78821": "Sudkov",
+    p.replace(" ", ""): name for name, t in TOWN_INFO.items() for p in t.psc
 }
 
 _SPLIT_RE = re.compile(r"\s*[,–/]\s*|\s+-\s+|(?<=\w)-(?=\w)")
@@ -117,3 +180,11 @@ def match_town_by_psc(psc: str | None, psc_map: dict[str, str]) -> str | None:
     """Kanonická obec pro PSČ z inzerátu, nebo None (mimo sledovaná PSČ)."""
     key = normalize_psc(psc)
     return psc_map.get(key) if key else None
+
+
+def psc_fits_town(psc: str | None, town: str | None) -> bool:
+    """Sedí PSČ aspoň první 3 číslicemi na obec? (velká města mají víc PSČ než
+    TOWN_INFO zná; "Šumperk" s PSČ 789 72 = Bohuslavice ale neprojde)."""
+    key = normalize_psc(psc)
+    info = TOWN_INFO.get(town) if town else None
+    return bool(key and info) and any(p.replace(" ", "")[:3] == key[:3] for p in info.psc)
