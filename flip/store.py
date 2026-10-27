@@ -97,8 +97,24 @@ class Store:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
         self._now: datetime | None = None
+
+    def _migrate(self) -> None:
+        """Jednorázové opravy starých dat (verze v PRAGMA user_version)."""
+        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 1:
+            # Před PSČ filtrem Bazoš ukládal obec podle názvu, a tak dostaly "Šumperk"
+            # i inzeráty ze Zábřehu, Mohelnice apod. Takové řádky (lokalita bez PSČ)
+            # už nejdou ověřit -> vyřadit z oblasti. Když je Bazoš ukáže znovu, obec
+            # se doplní podle PSČ.
+            self.conn.execute(
+                """UPDATE listings SET town = NULL
+                   WHERE source = 'bazos' AND town IS NOT NULL
+                     AND (locality IS NULL OR locality NOT GLOB '*[0-9][0-9][0-9]*')"""
+            )
+            self.conn.execute("PRAGMA user_version = 1")
 
     def __enter__(self) -> "Store":
         return self

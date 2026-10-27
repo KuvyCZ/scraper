@@ -139,6 +139,23 @@ class StoreTests(unittest.TestCase):
         # duplicita se nepočítá do mediánů dvakrát
         self.assertEqual(len(store.market_rows(kind="byt", window_days=365, in_area_only=True)), 1)
 
+    def test_old_bazos_towns_without_psc_are_dropped_once(self):
+        import os, tempfile
+        path = os.path.join(tempfile.mkdtemp(), "flip.db")
+        with Store(path) as store:
+            store.conn.execute("PRAGMA user_version = 0")      # databáze z doby před PSČ
+            store.upsert(make(source="bazos", eid="old", town="Šumperk", locality="Šumperk"))
+            store.upsert(make(source="bazos", eid="new", town="Šumperk", locality="Šumperk 787 01"))
+            store.upsert(make(source="sreality", eid="1", town="Šumperk", locality="Šumperk"))
+        with Store(path) as store:
+            self.assertIsNone(store.get("bazos", "old")["town"])
+            self.assertEqual(store.get("bazos", "new")["town"], "Šumperk")
+            self.assertEqual(store.get("sreality", "1")["town"], "Šumperk")
+            # znovu viděný inzerát dostane obec zpět a další start ji už nemaže
+            store.upsert(make(source="bazos", eid="old", town="Šumperk", locality="Šumperk"))
+        with Store(path) as store:
+            self.assertEqual(store.get("bazos", "old")["town"], "Šumperk")
+
     def test_market_window(self):
         store = Store(":memory:")
         store.set_now(datetime(2025, 1, 1, tzinfo=timezone.utc))
