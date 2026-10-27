@@ -7,7 +7,8 @@ Signály a váhy:
   motivace  15 %  zlevnění, doba na trhu, "dědictví / rychlé jednání" v popisu
 
 Chybí-li pro signál data, je None a jeho váha se rozdělí mezi ostatní — nikdy
-se nehádá. Vážná rizika (jen podíl, dražba, půdní prostor) skóre sráží na
+se nehádá. Skóre se ale stáhne podle toho, kolik vah chybí (MIN_COVERAGE_FACTOR):
+jeden jediný signál (např. jen "levné za m²") už nedá 100 a 🔥. Vážná rizika (jen podíl, dražba, půdní prostor) skóre sráží na
 polovinu a nemovitost nikdy nedostane 🔥 — ve zprávě ale vidět je.
 """
 
@@ -45,6 +46,7 @@ MARGIN_FULL_PCT = 25.0           # 25% marže = plné body
 DROP_FULL_PCT = 10.0             # zlevnění o 10 % = plné body za motivaci
 DOM_FULL_DAYS = 120              # 4 měsíce na trhu = plné body za motivaci
 SERIOUS_RISKS = {"share", "auction", "attic"}
+MIN_COVERAGE_FACTOR = 0.5        # se všemi signály ×1.0, s jediným malým signálem ~×0.6
 
 
 def _clamp(x: float) -> float:
@@ -176,7 +178,8 @@ def score_listing(
     score: int | None = None
     if present:
         total = sum(WEIGHTS[k] for k in present)
-        score = round(sum(WEIGHTS[k] * v for k, v in present.items()) / total * 100)
+        coverage = MIN_COVERAGE_FACTOR + (1 - MIN_COVERAGE_FACTOR) * total
+        score = round(sum(WEIGHTS[k] * v for k, v in present.items()) / total * coverage * 100)
 
     found_risks = risks(lst.description)
     serious = bool(SERIOUS_RISKS & set(found_risks))

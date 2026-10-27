@@ -48,6 +48,14 @@ class MarketTests(unittest.TestCase):
 
 
 class ScoringTests(unittest.TestCase):
+    def test_cheap_per_m2_alone_is_not_100_or_hot(self):
+        # z NAS: Bazoš 3+1 bez popisu stavu, jen "levné za m²" -> dřív skóre 100 a 🔥
+        lst = make(price=1_200_000, area=60)
+        res = score_listing(lst, MarketView(median_ppm2=40_000, comps_n=8, scope="area"), config())
+        self.assertEqual(res.signals["cena"], 1.0)
+        self.assertLess(res.score, 65)
+        self.assertFalse(res.hot)
+
     def test_cheap_wreck_with_good_margin_is_hot(self):
         lst = make(price=1_500_000, area=60, condition="Před rekonstrukcí", energy_rating="G")
         view = MarketView(median_ppm2=40_000, comps_n=8, scope="area", arv_ppm2=60_000, arv_n=6, arv_scope="area")
@@ -79,7 +87,7 @@ class ScoringTests(unittest.TestCase):
     def test_no_price_signals_never_hot(self):
         lst = make(price=None, condition="Před rekonstrukcí")
         res = score_listing(lst, MarketView(), config())
-        self.assertEqual(res.score, 100)        # jen stav… ale bez cenového signálu
+        self.assertEqual(res.score, 65)         # jen stav (málo dat -> staženo) a bez cenového signálu
         self.assertFalse(res.hot)
 
     def test_price_drop_and_time_on_market(self):

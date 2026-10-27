@@ -31,7 +31,7 @@ import httpx
 from flip.config import FlipConfig
 from flip.http import RateLimiter, RobotsChecker, polite_get
 from flip.model import FetchResult, Listing, utc_now_iso
-from flip.text import EXCLUDED_HOUSE_SUBTYPES, parse_layout
+from flip.text import EXCLUDED_HOUSE_SUBTYPES, house_subtype_from_text, parse_layout
 from flip.towns import match_town
 
 log = logging.getLogger("flip.sources.realingo")
@@ -116,8 +116,27 @@ def _fetch_description(client: httpx.Client, url: str, external_id: str, **kw: A
         return None
     try:
         return data["props"]["pageProps"]["store"]["offer"]["details"][external_id]["offer"]["detail"].get("description")
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, AttributeError):   # detail: null (stažený inzerát) apod.
         return None
+
+
+def _handle_item(item: dict[str, Any], selectors: dict[str, Any], cfg: FlipConfig, client: httpx.Client,
+                 known_ids: set[str], unknown: Counter[str], kw: dict[str, Any]) -> Listing | None:
+    if item.get("purpose") == "SELL" and item.get("property") not in selectors["property_kind_map"]:
+        unknown[f"property={item.get('property')}"] += 1
+    lst = normalize_item(item, selectors)
+    if lst is None or not lst.in_area or not cfg.wants_kind(lst.kind):
+        return None
+    if lst.kind == "dum" and item.get("category") not in selectors.get("house_category_map", {}):
+        unknown[f"house category={item.get('category')}"] += 1
+    if lst.price is not None and lst.price > cfg.price_max:
+        return None
+    if cfg.fetch_details and lst.external_id not in known_ids:
+        lst.description = _fetch_description(client, lst.url, lst.external_id, **kw)
+        # kategorie "rodinný" u Realinga zahrnuje i chaty — popis to prozradí hned na začátku
+        if lst.kind == "dum" and house_subtype_from_text((lst.description or "")[:150]) in EXCLUDED_HOUSE_SUBTYPES:
+            return None
+    return lst
 
 
 def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
@@ -144,21 +163,19 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
 
             page_in_budget = False
             for item in items:
-                price = (item.get("price") or {}).get("total")
-                if price is not None and price <= cfg.price_max:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    lst = _handle_item(item, selectors, cfg, client, known_ids, unknown, kw)
+                except Exception as exc:  # noqa: BLE001 – jeden vadný inzerát nesmí shodit celý zdroj
+                    log.warning("Realingo: inzerát %s přeskočen: %s", item.get("id"), exc)
+                    continue
+                price = item.get("price")
+                price = price.get("total") if isinstance(price, dict) else None
+                if isinstance(price, (int, float)) and price <= cfg.price_max:
                     page_in_budget = True
-                if item.get("purpose") == "SELL" and item.get("property") not in selectors["property_kind_map"]:
-                    unknown[f"property={item.get('property')}"] += 1
-                lst = normalize_item(item, selectors)
-                if lst is None or not lst.in_area or not cfg.wants_kind(lst.kind):
-                    continue
-                if lst.kind == "dum" and item.get("category") not in selectors.get("house_category_map", {}):
-                    unknown[f"house category={item.get('category')}"] += 1
-                if lst.price is not None and lst.price > cfg.price_max:
-                    continue
-                if cfg.fetch_details and lst.external_id not in known_ids:
-                    lst.description = _fetch_description(client, lst.url, lst.external_id, **kw)
-                out.append(lst)
+                if lst is not None:
+                    out.append(lst)
 
             # řazeno od nejlevnějšího: celá strana nad rozpočtem -> dál už jen dražší
             if page > 1 and not page_in_budget:

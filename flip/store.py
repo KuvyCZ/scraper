@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from flip.model import Listing
+from flip.sanity import FLAT_AREA_RANGE, HOUSE_AREA_MAX, MIN_LAND_M2, MIN_SALE_PRICE, RENTAL_PRICE_MAX
+from flip.text import looks_like_rental
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS listings (
@@ -115,6 +117,33 @@ class Store:
                      AND (locality IS NULL OR locality NOT GLOB '*[0-9][0-9][0-9]*')"""
             )
             self.conn.execute("PRAGMA user_version = 1")
+        if version < 2:
+            self._clean_stored_values()
+            self.conn.execute("PRAGMA user_version = 2")
+
+    def _clean_stored_values(self) -> None:
+        """Stejná pravidla jako flip/sanity.py pro řádky uložené před jejich zavedením
+        (jinak by špatné plochy a "ceny" pronájmů kazily mediány celý rok)."""
+        rows = self.conn.execute(
+            "SELECT source, external_id, description FROM listings WHERE price IS NOT NULL AND price < ?",
+            (RENTAL_PRICE_MAX,),
+        ).fetchall()
+        for r in rows:
+            if looks_like_rental(r["description"]):     # pronájem: pryč z oblasti i z mediánů
+                self.conn.execute(
+                    "UPDATE listings SET town = NULL, price = NULL WHERE source = ? AND external_id = ?",
+                    (r["source"], r["external_id"]),
+                )
+        self.conn.executescript(f"""
+            UPDATE listings SET price = NULL WHERE price < {MIN_SALE_PRICE};
+            UPDATE listings SET land_m2 = NULL WHERE land_m2 < {MIN_LAND_M2};
+            UPDATE listings SET area_m2 = NULL
+                WHERE kind = 'dum' AND land_m2 IS NOT NULL AND abs(area_m2 - land_m2) < 1;
+            UPDATE listings SET land_m2 = COALESCE(land_m2, area_m2), area_m2 = NULL
+                WHERE kind = 'dum' AND area_m2 > {HOUSE_AREA_MAX};
+            UPDATE listings SET area_m2 = NULL
+                WHERE kind = 'byt' AND (area_m2 < {FLAT_AREA_RANGE[0]} OR area_m2 > {FLAT_AREA_RANGE[1]});
+        """)
 
     def __enter__(self) -> "Store":
         return self

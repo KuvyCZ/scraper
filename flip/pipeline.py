@@ -21,6 +21,7 @@ from flip.dedup import is_duplicate
 from flip.market import MarketData, analyze
 from flip.model import FetchResult, Listing
 from flip.notifier import Notifier, format_drop, format_new, format_summary_line
+from flip.sanity import clean
 from flip.scoring import ScoreResult, score_listing
 from flip.sources import DISPLAY_NAMES, SOURCES
 from flip.store import Store, cluster_key
@@ -84,9 +85,10 @@ def _score(store: Store, lst: Listing, markets: dict[str, MarketData], cfg: Flip
 def process(result: FetchResult, source: str, store: Store, notifier: Notifier, cfg: FlipConfig) -> RunStats:
     stats = RunStats(source=source, fetched=len(result.listings))
     stats.baseline = not store.baseline_done(source)
+    listings = [lst for lst in map(clean, result.listings) if lst is not None]
 
     # 1) uložit všechno (i mimo oblast = data o trhu), u nových v oblasti hledat duplicity
-    for lst in result.listings:
+    for lst in listings:
         prev, _ = store.upsert(lst)
         if prev is not None:
             store.fill_from_stored(lst)
@@ -101,7 +103,7 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
 
     # 3) skóre + rozhodnutí o zprávě
     baseline_items: list[tuple[Listing, ScoreResult]] = []
-    for lst in result.listings:
+    for lst in listings:
         if lst.in_area:
             stats.in_area += 1
         if not eligible(lst, cfg):
