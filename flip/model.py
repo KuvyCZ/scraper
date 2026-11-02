@@ -14,6 +14,15 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def price_steps(history: list[tuple[int | None, str]]) -> list[tuple[int, str]]:
+    """Historie cen -> jen skutečné změny: bez "cena na dotaz" (None) a bez opakování."""
+    steps: list[tuple[int, str]] = []
+    for price, seen_at in history:
+        if price and (not steps or steps[-1][0] != price):
+            steps.append((price, seen_at))
+    return steps
+
+
 @dataclass(slots=True)
 class Listing:
     source: str                        # "sreality" | "realingo" | "bazos" | "reality_sumperk"
@@ -63,8 +72,13 @@ class FetchResult:
     nejspíš se změnil web (redesign) — to se počítá jako selhání, ne jako "nic nového".
     `complete` = False, když zdroj část inzerátů odložil na další běh (Sreality: strop
     detailů). Při prvním běhu se pak shrnutí posílá až s kompletním seznamem.
+    `full_scan` = True, když zdroj prošel CELOU nabídku (žádný strop stránek, žádná
+    chyba stránky) a vrátil všechny inzeráty, které už v DB má. Jen pak jde říct,
+    že inzerát, který chybí, z webu zmizel (prodaný / stažený). Bazoš je vždy False:
+    čte jen nejnovější stránky celostátní kategorie.
     """
 
     listings: list[Listing]
     raw_count: int
     complete: bool = True
+    full_scan: bool = False

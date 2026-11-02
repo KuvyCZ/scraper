@@ -7,6 +7,8 @@ Pravidla notifikací:
   * Zlevnění už oznámené nemovitosti o >= PRICE_DROP_ALERT_PCT -> 📉.
   * PRVNÍ běh zdroje (prázdná DB) -> místo desítek zpráv jedno shrnutí s top N;
     ostatní se tiše uloží a ozvou se až při zlevnění.
+  * Zdroj, který prošel celou nabídku (Sreality, Realingo, Reality Šumperk), označí
+    inzeráty, které v ní už 2 dny nejsou, jako zmizelé (gone_at) — nejspíš prodané.
   * Zdroj, který nic nerozparsuje (0 inzerátů), se počítá jako selhání — nejspíš
     změna webu; po N selháních v kuse přijde jedno varování.
 """
@@ -40,6 +42,7 @@ class RunStats:
     new_sent: int = 0
     drops_sent: int = 0
     duplicates: int = 0
+    gone: int = 0
     baseline: bool = False
     error: str | None = None
     scored: list[tuple[Listing, ScoreResult]] = field(default_factory=list)
@@ -89,10 +92,12 @@ def _score(store: Store, lst: Listing, markets: dict[str, MarketData], cfg: Flip
     members = store.cluster_members(key)
     cluster = {(m["source"], m["external_id"]) for m in members}
     lst.duplicate_sources = [(m["source"], m["url"]) for m in members if (m["source"], m["external_id"]) != lst.key]
-    first_seen = min((m["first_seen"] for m in members), default=None)
+    earliest = min(members, key=lambda m: m["first_seen"], default=None)
+    first_seen = earliest["first_seen"] if earliest is not None else None
     view = analyze(lst, markets[lst.kind], min_comps=cfg.min_comps, cluster=cluster)
     res = score_listing(
         lst, view, cfg, price_history=store.price_history(*lst.key), first_seen=first_seen, now=store.now(),
+        listed_before_start=bool(earliest is not None and earliest["seen_at_start"]),
     )
     store.save_score(lst.source, lst.external_id, res.score, res.breakdown())
     return key, res
@@ -105,11 +110,15 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
 
     # 1) uložit všechno (i mimo oblast = data o trhu), u nových v oblasti hledat duplicity
     for lst in listings:
-        prev, _ = store.upsert(lst)
+        prev, _ = store.upsert(lst, seen_at_start=stats.baseline)
         if prev is not None:
             store.fill_from_stored(lst)
         elif lst.in_area:
             _link_duplicate(store, lst)
+
+    # co v úplném průchodu chybí, z webu zmizelo (u Bazoše se to poznat nedá)
+    if result.full_scan:
+        stats.gone = store.mark_gone(source, [k for k in ("byt", "dum") if cfg.wants_kind(k)])
 
     # 2) trh až po uložení dávky (nové inzeráty už jsou ve srovnání)
     markets = {
@@ -164,9 +173,9 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
             store.mark_baseline_done(source)
 
     log.info(
-        "%s: staženo=%d | v obcích=%d | v rozpočtu=%d | nové=%d | zlevnění=%d | duplicity=%d%s",
+        "%s: staženo=%d | v obcích=%d | v rozpočtu=%d | nové=%d | zlevnění=%d | duplicity=%d | zmizelo=%d%s",
         source, stats.fetched, stats.in_area, stats.eligible, stats.new_sent, stats.drops_sent,
-        stats.duplicates, " | PRVNÍ BĚH" if stats.baseline else "",
+        stats.duplicates, stats.gone, " | PRVNÍ BĚH" if stats.baseline else "",
     )
     return stats
 

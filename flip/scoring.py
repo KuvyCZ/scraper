@@ -20,7 +20,7 @@ from typing import Any
 
 from flip.config import FlipConfig
 from flip.market import NEEDS_RENO_CONDITIONS, RENOVATED_CONDITIONS, MarketView
-from flip.model import Listing
+from flip.model import Listing, price_steps
 from flip.text import condition_from_text, is_motivated, risks
 
 WEIGHTS: dict[str, float] = {"stav": 0.30, "marze": 0.30, "cena": 0.25, "motivace": 0.15}
@@ -76,6 +76,8 @@ class ScoreResult:
     risks: list[str] = field(default_factory=list)
     hot: bool = False
     ppm2: float | None = None
+    price_steps: list[tuple[int, str]] = field(default_factory=list)   # skutečné změny ceny [(cena, kdy)]
+    listed_before_start: bool = False      # byl online už při spuštění sledování -> dny jsou "aspoň"
 
     @property
     def vs_median_pct(self) -> float | None:
@@ -89,7 +91,8 @@ class ScoreResult:
             "score": self.score, "signals": self.signals, "condition": self.condition_label,
             "market": asdict(self.market), "estimate": asdict(self.estimate) if self.estimate else None,
             "price_drop_pct": self.price_drop_pct, "days_on_market": self.days_on_market,
-            "risks": self.risks, "hot": self.hot,
+            "risks": self.risks, "hot": self.hot, "price_steps": self.price_steps,
+            "listed_before_start": self.listed_before_start,
         }
 
 
@@ -143,6 +146,7 @@ def score_listing(
     price_history: list[tuple[int | None, str]] | None = None,
     first_seen: str | None = None,
     now: datetime | None = None,
+    listed_before_start: bool = False,
 ) -> ScoreResult:
     s_stav, cond_label = _condition(lst)
     needs_work = (s_stav or 0) >= NEEDS_WORK_MIN or lst.building_condition in NEEDS_RENO_CONDITIONS
@@ -196,5 +200,6 @@ def score_listing(
     return ScoreResult(
         score=score, signals=signals, condition_label=cond_label, needs_work=needs_work, market=market,
         estimate=estimate, price_drop_pct=drop_pct, days_on_market=dom, motivated_text=motivated,
-        risks=found_risks, hot=hot, ppm2=ppm2,
+        risks=found_risks, hot=hot, ppm2=ppm2, price_steps=price_steps(price_history or []),
+        listed_before_start=listed_before_start,
     )

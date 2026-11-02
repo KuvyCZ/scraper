@@ -25,7 +25,7 @@ from typing import Any, Callable
 
 from flip.config import FlipConfig
 from flip.market import AREA_BAND, SANE_PPM2, row_condition
-from flip.notifier import SIMILAR_PREFIX, Notifier, czk, e, link
+from flip.notifier import SIMILAR_PREFIX, Notifier, czk, e, link, short_date
 from flip.sources import DISPLAY_NAMES
 from flip.store import Store, iso
 from flip.towns import TOWN_INFO, okres_of
@@ -85,6 +85,8 @@ def format_similar(row: sqlite3.Row, where: str | None, similar: list[sqlite3.Ro
         cond = row_condition(r["building_condition"], r["description"])
         tag = {"renovated": " · renovated", "needs_reno": " · to renovate"}.get(cond, "")
         town = f" · {e(r['town'])}" if r["town"] != row["town"] else ""
+        if r["gone_at"]:
+            tag += f" · gone {short_date(r['gone_at'])}"
         lines.append(
             f"• {e(r['subtype'] or '')} {r['area_m2']:g} m² · {czk(r['price'])} · "
             f"{czk(r['price'] / r['area_m2'])}/m²{tag}{town} — "
@@ -92,7 +94,7 @@ def format_similar(row: sqlite3.Row, where: str | None, similar: list[sqlite3.Ro
         )
     if len(similar) > SIMILAR_LIMIT:
         lines.append(f"…and {len(similar) - SIMILAR_LIMIT} more")
-    lines.append("<i>Asking prices, not sale prices.</i>")
+    lines.append("<i>Asking prices, not sale prices. \"gone\" = no longer online, most likely sold.</i>")
     return "\n".join(lines)
 
 

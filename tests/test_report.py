@@ -35,7 +35,7 @@ class WeeklyTownReportTests(unittest.TestCase):
         self.add(3_000_000, prefix="a")                       # ceny stejných inzerátů vzrostly na 50k/m²
         self.assertTrue(report_due(self.store, self.cfg))
         send_town_report(self.store, self.cfg, self.notifier)
-        self.assertIn("▲25%", self.notifier.sent[-1])
+        self.assertIn("▲25%", "\n".join(self.notifier.sent[-3:]))
 
         with open(os.path.join(self.dir, CSV_NAME), encoding="utf-8-sig") as fh:
             lines = fh.read().splitlines()

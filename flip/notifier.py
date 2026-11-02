@@ -10,6 +10,7 @@ import html
 import json
 import logging
 import time
+from datetime import datetime
 
 import httpx
 
@@ -51,6 +52,43 @@ def czk_short(value: float | None) -> str:
 
 def money_short(value: float | None) -> str:
     return czk_short(value).lstrip("+")
+
+
+def short_date(iso_ts: str | None) -> str:
+    """'2026-10-12T08:00:00+00:00' -> '12 Oct'."""
+    if not iso_ts:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso_ts)
+    except ValueError:
+        return iso_ts[:10]
+    return f"{dt.day} {dt.strftime('%b')}"
+
+
+def price_story(steps: list[tuple[int, str]], *, max_steps: int = 5) -> str | None:
+    """[(3790000, t0), (3550000, t1), (3450000, t2)] -> '3.79M → 3.55M → 3.45M in 18 days (2 cuts, −9 %)'.
+    None = cena se nikdy neměnila."""
+    if len(steps) < 2:
+        return None
+    prices = [p for p, _ in steps]
+    shown = [money_short(p) for p in prices[-max_steps:]]
+    if len(prices) > max_steps:
+        shown.insert(0, "…")
+    cuts = sum(1 for a, b in zip(prices, prices[1:]) if b < a)
+    rises = len(prices) - 1 - cuts
+    try:
+        days = (datetime.fromisoformat(steps[-1][1]) - datetime.fromisoformat(steps[0][1])).days
+    except ValueError:
+        days = None
+    total = (prices[-1] / prices[0] - 1) * 100
+    bits = []
+    if cuts:
+        bits.append(f"{cuts} cut{'s' if cuts > 1 else ''}")
+    if rises:
+        bits.append(f"{rises} rise{'s' if rises > 1 else ''}")
+    bits.append(f"{total:+.0f} %".replace("-", "−"))
+    when = f" in {days} days" if days else ""
+    return f"{' → '.join(shown)}{when} ({', '.join(bits)})"
 
 
 def link(url: str, text: str) -> str:
@@ -105,10 +143,17 @@ def _body(lst: Listing, res: ScoreResult) -> list[str]:
         lines.append("💰 Flip estimate: not enough renovated listings nearby yet to estimate resale price")
 
     extra = []
-    if res.price_drop_pct and res.price_drop_pct > 0:
+    if story := price_story(res.price_steps):
+        icon = "📉" if res.price_steps[-1][0] < res.price_steps[0][0] else "💲"
+        extra.append(f"{icon} {story}")
+    elif res.price_drop_pct and res.price_drop_pct > 0:
         extra.append(f"📉 {res.price_drop_pct:.0f} % cheaper than when first seen")
-    if res.days_on_market and res.days_on_market >= 30:
-        extra.append(f"⏳ {res.days_on_market} days on market")
+    days = res.days_on_market or 0
+    if res.listed_before_start:
+        since = f"online {days}+ days" if days >= 1 else "already online"
+        extra.append(f"⏳ {since} (was up before watching started)")
+    elif days >= 30:
+        extra.append(f"⏳ {days} days on market")
     if res.motivated_text:
         extra.append("🏃 seller sounds motivated")
     lines.extend(extra)

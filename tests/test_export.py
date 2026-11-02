@@ -51,10 +51,12 @@ class TelegramExportTests(unittest.TestCase):
         content = self.notifier.files[0][1]
         self.assertTrue(content.startswith(b"\xef\xbb\xbf"))                    # BOM pro Excel
         rows = list(csv.reader(io.StringIO(content.decode("utf-8-sig")), delimiter=";"))
-        self.assertEqual(rows[0][:5], ["town", "kind", "subtype", "price", "area_m2"])
+        self.assertEqual(rows[0][:5], ["town", "kind", "subtype", "status", "price"])
         self.assertEqual(len(rows), 2)                                          # jen Šumperk
-        self.assertEqual(rows[1][0], "Šumperk")
-        self.assertEqual(rows[1][4], "61,5")                                    # desetinná čárka
+        row = dict(zip(rows[0], rows[1]))
+        self.assertEqual(row["town"], "Šumperk")
+        self.assertEqual(row["area_m2"], "61,5")                                # desetinná čárka
+        self.assertEqual(row["status"], "online")
 
         db_copy = os.path.join(self.dir, "copy.db")
         with open(db_copy, "wb") as fh:

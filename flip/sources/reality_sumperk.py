@@ -96,6 +96,7 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
     out: list[Listing] = []
     raw_count = 0
     base = selectors["base_url"]
+    full_scan = True        # False = některá kategorie nedošla na konec (strop stránek / chyba)
 
     categories: list[tuple[str, str, str | None]] = []   # (kind, path, layout)
     if cfg.include_flats:
@@ -110,6 +111,7 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                 url = base + path + (f'?{selectors["page_query_param"]}={page}' if page > 1 else "")
                 resp = polite_get(client, url, **kw)
                 if resp is None:
+                    full_scan = False
                     break
                 items = parse_page(resp.text, selectors)
                 if not items:
@@ -128,6 +130,8 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                         if full:
                             lst.description = full
                     out.append(lst)
+            else:
+                full_scan = False
 
     log.info("reality-sumperk.cz: %d inzerátů ve sledovaných obcích (z %d prošlých)", len(out), raw_count)
-    return FetchResult(out, raw_count)
+    return FetchResult(out, raw_count, full_scan=full_scan)
