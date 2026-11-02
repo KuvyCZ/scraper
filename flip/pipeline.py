@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from flip.config import FlipConfig
 from flip.dedup import is_duplicate
 from flip.market import MarketData, analyze
 from flip.model import FetchResult, Listing
-from flip.notifier import Notifier, format_drop, format_new, format_summary_line
+from flip.notifier import (Notifier, format_drop, format_favorite_change, format_gone, format_new,
+                           format_summary_line)
 from flip.sanity import clean
 from flip.scoring import ScoreResult, score_listing
 from flip.sources import DISPLAY_NAMES, SOURCES
@@ -74,6 +76,35 @@ def _with_budget_note(text: str, lst: Listing, res: ScoreResult, cfg: FlipConfig
     return f"{head}\n{note}\n{rest}"
 
 
+def load_markets(store: Store, cfg: FlipConfig) -> dict[str, MarketData]:
+    """Srovnatelné inzeráty + změřená sleva při prodeji, pro byty i domy."""
+    return {
+        kind: MarketData(store.market_rows(kind=kind, window_days=cfg.market_window_days, in_area_only=False),
+                         now=store.now(), sales=store.sale_rows(kind=kind))
+        for kind in ("byt", "dum")
+    }
+
+
+def _report_gone(store: Store, notifier: Notifier, cfg: FlipConfig, rows: list) -> None:
+    """🏁 krátká zpráva, když zmizí nemovitost, o které už přišla zpráva — jen jednou
+    a jen když není k vidění ani na jiném webu."""
+    for row in rows:
+        key = store.cluster_of(row["source"], row["external_id"])
+        sent = store.notified(key)
+        favorite = store.is_favorite(key)
+        if (sent is None and not favorite) or store.cluster_still_online(key, (row["source"], row["external_id"])):
+            continue
+        members = store.cluster_members(key)
+        earliest = min(members, key=lambda m: m["first_seen"])
+        try:
+            days = (datetime.fromisoformat(row["gone_at"]) - datetime.fromisoformat(earliest["first_seen"])).days
+        except (TypeError, ValueError):
+            days = None
+        notifier.send(format_gone(row, store.price_steps(row["source"], row["external_id"]), days,
+                                  bool(earliest["seen_at_start"]), sent["score"] if sent else None, cfg.hot_score,
+                                  code=store.code_of(key), favorite=favorite))
+
+
 def _link_duplicate(store: Store, lst: Listing) -> None:
     """Nový inzerát ve sledované obci: je to nemovitost, kterou už máme z jiného portálu?"""
     row = store.get(*lst.key)
@@ -89,6 +120,7 @@ def _link_duplicate(store: Store, lst: Listing) -> None:
 
 def _score(store: Store, lst: Listing, markets: dict[str, MarketData], cfg: FlipConfig) -> tuple[str, ScoreResult]:
     key = store.cluster_of(*lst.key)
+    lst.code = store.code_of(key)
     members = store.cluster_members(key)
     cluster = {(m["source"], m["external_id"]) for m in members}
     lst.duplicate_sources = [(m["source"], m["url"]) for m in members if (m["source"], m["external_id"]) != lst.key]
@@ -109,22 +141,26 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
     listings = [lst for lst in map(clean, result.listings) if lst is not None]
 
     # 1) uložit všechno (i mimo oblast = data o trhu), u nových v oblasti hledat duplicity
+    fav_changes: dict[str, tuple[Listing, int]] = {}      # oblíbené se změnou ceny -> zpráva
     for lst in listings:
-        prev, _ = store.upsert(lst, seen_at_start=stats.baseline)
+        prev, changed = store.upsert(lst, seen_at_start=stats.baseline)
         if prev is not None:
             store.fill_from_stored(lst)
+            if changed and prev["price"] and lst.price and not stats.baseline:
+                key = store.cluster_of(*lst.key)
+                if store.is_favorite(key):
+                    fav_changes[key] = (lst, prev["price"])
         elif lst.in_area:
             _link_duplicate(store, lst)
 
     # co v úplném průchodu chybí, z webu zmizelo (u Bazoše se to poznat nedá)
     if result.full_scan:
-        stats.gone = store.mark_gone(source, [k for k in ("byt", "dum") if cfg.wants_kind(k)])
+        gone = store.mark_gone(source, [k for k in ("byt", "dum") if cfg.wants_kind(k)])
+        stats.gone = len(gone)
+        _report_gone(store, notifier, cfg, gone)
 
     # 2) trh až po uložení dávky (nové inzeráty už jsou ve srovnání)
-    markets = {
-        kind: MarketData(store.market_rows(kind=kind, window_days=cfg.market_window_days, in_area_only=False))
-        for kind in ("byt", "dum")
-    }
+    markets = load_markets(store, cfg)
 
     # 3) skóre + rozhodnutí o zprávě
     baseline_items: list[tuple[Listing, ScoreResult]] = []
@@ -157,11 +193,20 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
 
         last = done["last_notified_price"]
         if lst.price and last and lst.price <= last * (1 - cfg.price_drop_alert_pct / 100):
-            if notifier.send(_with_budget_note(format_drop(lst, res, last), lst, res, cfg), similar_key=lst.key):
+            # oznámená cena v historii TOHOTO inzerátu není -> pochází z jiného webu
+            other_site = last not in {p for p, _ in store.price_history(*lst.key)}
+            text = format_drop(lst, res, last, other_site=other_site)
+            if notifier.send(_with_budget_note(text, lst, res, cfg), similar_key=lst.key):
                 store.mark_notified(key, lst.price, res.score)
                 stats.drops_sent += 1
+                fav_changes.pop(key, None)        # už přišla 📉, ⭐ by to jen opakovala
         elif key != cluster_key(*lst.key):
             stats.duplicates += 1
+
+    # oblíbené: každá změna ceny (i malá, i mimo rozpočet)
+    for key, (lst, old) in fav_changes.items():
+        lst.code = store.code_of(key)
+        notifier.send(format_favorite_change(lst, old, store.price_steps(*lst.key)), similar_key=lst.key)
 
     # 4) první běh: jedno shrnutí místo záplavy
     if stats.baseline:
@@ -210,7 +255,12 @@ def run_source(source: str, cfg: FlipConfig, notifier: Notifier, store: Store) -
     """Jeden běh jednoho zdroje včetně evidence selhání. Nikdy nevyhazuje výjimku."""
     module = SOURCES[source]
     try:
-        result = module.fetch_listings(cfg, store.known_ids(source))
+        # po prvním běhu se u pár starších inzerátů znovu přečte detail (nový popis, "sleva")
+        refresh = store.refresh_ids(source) if store.baseline_done(source) and cfg.fetch_details else set()
+        if refresh:
+            result = module.fetch_listings(cfg, store.known_ids(source), refresh)
+        else:
+            result = module.fetch_listings(cfg, store.known_ids(source))
         if result.raw_count == 0:
             raise RuntimeError("source returned 0 listings — site down or layout changed")
     except Exception as exc:  # noqa: BLE001 – pád jednoho zdroje nesmí shodit ostatní

@@ -90,7 +90,7 @@ def _full_description(client: httpx.Client, url: str, selectors: dict[str, Any],
     return html.unescape(m.group(1)).strip() if m else None
 
 
-def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
+def fetch_listings(cfg: FlipConfig, known_ids: set[str], refresh_ids: set[str] = frozenset()) -> FetchResult:
     selectors = load_selectors()
     kw = {"robots": RobotsChecker(), "rate_limiter": RateLimiter()}
     out: list[Listing] = []
@@ -125,10 +125,11 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                     lst = to_listing(item, kind, layout, base)
                     if lst is None or not lst.in_area:
                         continue
-                    if cfg.fetch_details and lst.external_id not in known_ids:
+                    if cfg.fetch_details and (lst.external_id not in known_ids or lst.external_id in refresh_ids):
                         full = _full_description(client, lst.url, selectors, **kw)
                         if full:
                             lst.description = full
+                            lst.detail_fetched = True
                     out.append(lst)
             else:
                 full_scan = False

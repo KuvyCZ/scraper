@@ -51,7 +51,7 @@ class TelegramExportTests(unittest.TestCase):
         content = self.notifier.files[0][1]
         self.assertTrue(content.startswith(b"\xef\xbb\xbf"))                    # BOM pro Excel
         rows = list(csv.reader(io.StringIO(content.decode("utf-8-sig")), delimiter=";"))
-        self.assertEqual(rows[0][:5], ["town", "kind", "subtype", "status", "price"])
+        self.assertEqual(rows[0][:5], ["code", "town", "kind", "subtype", "status"])
         self.assertEqual(len(rows), 2)                                          # jen Šumperk
         row = dict(zip(rows[0], rows[1]))
         self.assertEqual(row["town"], "Šumperk")

@@ -12,10 +12,10 @@ import sqlite3
 from typing import Any
 
 from flip.config import FlipConfig
-from flip.market import MarketData, scope_label
+from flip.market import scope_label
 from flip.model import Listing
-from flip.notifier import Notifier, czk, czk_short, describe_kind, e, link
-from flip.pipeline import _score, over_budget, within_budget
+from flip.notifier import Notifier, code_tag, czk, czk_short, describe_kind, e, link
+from flip.pipeline import _score, load_markets, over_budget, within_budget
 from flip.sanity import clean
 from flip.scoring import ScoreResult
 from flip.sources import DISPLAY_NAMES
@@ -35,10 +35,7 @@ def latest_rescored(store: Store, cfg: FlipConfig, n: int = DEFAULT_N) -> list[t
         """SELECT * FROM listings WHERE town IS NOT NULL AND dup_of IS NULL AND gone_at IS NULL
            ORDER BY first_seen DESC LIMIT ?""", (n,),
     ).fetchall()
-    markets = {
-        kind: MarketData(store.market_rows(kind=kind, window_days=cfg.market_window_days, in_area_only=False))
-        for kind in ("byt", "dum")
-    }
+    markets = load_markets(store, cfg)
     out = []
     for row in rows:
         lst = clean(_listing(row))        # starší řádky: chybějící plocha z popisu apod.
@@ -64,7 +61,8 @@ def format_latest(items: list[tuple[Listing, ScoreResult]], cfg: FlipConfig) -> 
             bits.append(f"flip {czk_short(res.estimate.margin)}")
         if over_budget(lst, cfg):
             bits.append("💸 over budget" + (" but cheap per m²" if within_budget(lst, res, cfg) else ""))
-        lines.append(f"• {' · '.join(bits)} — {link(lst.url, DISPLAY_NAMES.get(lst.source, lst.source))}")
+        lines.append(f"• {' · '.join(bits)}{code_tag(lst.code)} — "
+                     f"{link(lst.url, DISPLAY_NAMES.get(lst.source, lst.source))}")
     lines.append("\n<i>vs = price per m² compared with similar listings there. Asking prices, not sale prices.</i>")
     return "\n".join(lines)
 

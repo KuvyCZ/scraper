@@ -109,7 +109,8 @@ def to_listing(item: dict[str, str], kind: str, base_url: str,
     )
 
 
-def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
+def fetch_listings(cfg: FlipConfig, known_ids: set[str], refresh_ids: set[str] = frozenset()) -> FetchResult:
+    # popis je přímo ve výpisu (žádný detail) -> refresh_ids není potřeba
     selectors = load_selectors()
     kw = {"robots": RobotsChecker(), "rate_limiter": RateLimiter()}
     out: list[Listing] = []

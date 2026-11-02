@@ -11,6 +11,8 @@ import json
 import logging
 import time
 from datetime import datetime
+from types import SimpleNamespace
+from typing import Any, Mapping
 
 import httpx
 
@@ -26,6 +28,7 @@ log = logging.getLogger("flip.notifier")
 API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 METHOD_URL = "https://api.telegram.org/bot{token}/{method}"
 SIMILAR_PREFIX = "sim:"           # callback_data tlačítka "🔎 Similar nearby": sim:{source}:{external_id}
+FAV_PREFIX = "fav:"               # callback_data tlačítka "⭐ Save": fav:{source}:{external_id}
 MAX_LEN = 4000  # Telegram limit 4096
 
 
@@ -87,7 +90,7 @@ def price_story(steps: list[tuple[int, str]], *, max_steps: int = 5) -> str | No
     if rises:
         bits.append(f"{rises} rise{'s' if rises > 1 else ''}")
     bits.append(f"{total:+.0f} %".replace("-", "−"))
-    when = f" in {days} days" if days else ""
+    when = f" in {days} day{'s' if days != 1 else ''}" if days else ""
     return f"{' → '.join(shown)}{when} ({', '.join(bits)})"
 
 
@@ -122,7 +125,8 @@ def _body(lst: Listing, res: ScoreResult) -> list[str]:
         price += f" · {czk(res.ppm2)}/m²"
         if res.vs_median_pct is not None:
             where = scope_label(res.market.scope, lst.town)
-            price += f" ({res.vs_median_pct:+.0f} % vs median, {res.market.comps_n} similar in {where})"
+            land = " with similar land" if res.market.land_matched else ""
+            price += f" ({res.vs_median_pct:+.0f} % vs median, {res.market.comps_n} similar{land} in {where})"
     lines.append(price)
 
     if res.condition_label:
@@ -138,7 +142,11 @@ def _body(lst: Listing, res: ScoreResult) -> list[str]:
             f" · costs ~{money_short(est.holding_cost)} → {verdict} <b>{czk_short(est.margin)} ({est.margin_pct:+.0f} %)</b>"
         )
         where = scope_label(res.market.arv_scope, lst.town)
-        lines.append(f"   <i>from {res.market.arv_n} renovated listings in {where}; asking prices, not sale prices</i>")
+        sale = res.market.sale
+        haggle = (f"sale price assumes asking prices fall {sale.drop_pct:.0f} % before selling, as {sale.n} gone "
+                  f"listings did{' in this okres' if sale.scope == 'okres' else ''}, plus 5 % haggling"
+                  if sale else "sale price assumes the usual haggling off asking")
+        lines.append(f"   <i>from {res.market.arv_n} renovated listings in {where}; {haggle}</i>")
     elif res.needs_work:
         lines.append("💰 Flip estimate: not enough renovated listings nearby yet to estimate resale price")
 
@@ -179,9 +187,13 @@ def _body(lst: Listing, res: ScoreResult) -> list[str]:
     return lines
 
 
+def code_tag(code: int | None) -> str:
+    return f" · #{code}" if code else ""
+
+
 def header_title(lst: Listing, res: ScoreResult) -> str:
     score = f"{res.score}/100" if res.score is not None else "?/100"
-    return f"<b>{score}</b> · {e(describe_kind(lst))} · {e(lst.town)}"
+    return f"<b>{score}</b> · {e(describe_kind(lst))} · {e(lst.town)}{code_tag(lst.code)}"
 
 
 def format_new(lst: Listing, res: ScoreResult) -> str:
@@ -189,13 +201,48 @@ def format_new(lst: Listing, res: ScoreResult) -> str:
     return "\n".join([f"{icon} {header_title(lst, res)}", *_body(lst, res)])
 
 
-def format_drop(lst: Listing, res: ScoreResult, old_price: int) -> str:
+def format_drop(lst: Listing, res: ScoreResult, old_price: int, *, other_site: bool = False) -> str:
+    """`other_site` = stará cena je z jiného webu: stejná nemovitost je tady levnější."""
     icon = "🔥📉" if res.hot else "📉"
     diff = (lst.price or 0) - old_price
     pct = diff / old_price * 100 if old_price else 0
-    head = (f"{icon} <b>Price drop {czk_short(diff)} ({pct:.0f} %)</b>: {czk(old_price)} → {czk(lst.price)}"
-            f" on {e(DISPLAY_NAMES.get(lst.source, lst.source))}")
+    site = e(DISPLAY_NAMES.get(lst.source, lst.source))
+    if other_site:
+        head = (f"{icon} <b>Cheaper on {site} {czk_short(diff)} ({pct:.0f} %)</b>: {czk(old_price)} on the site"
+                f" you got it from → {czk(lst.price)} here")
+    else:
+        head = (f"{icon} <b>Price drop {czk_short(diff)} ({pct:.0f} %)</b>: {czk(old_price)} → {czk(lst.price)}"
+                f" on {site}")
     return "\n".join([head, header_title(lst, res), *_body(lst, res)])
+
+
+def format_gone(row: Mapping[str, Any], steps: list[tuple[int, str]], days: int | None,
+                listed_before_start: bool, score: int | None, hot_score: int, *,
+                code: int | None = None, favorite: bool = False) -> str:
+    """🏁 inzerát, o kterém přišla zpráva (nebo oblíbený), zmizel z webu (nejspíš prodaný)."""
+    kind = describe_kind(SimpleNamespace(kind=row["kind"], subtype=row["subtype"]))
+    age = "" if days is None else f" after {days}{'+' if listed_before_start else ''} day{'s' if days != 1 else ''}"
+    star = "⭐ Favourite " if favorite else ""
+    lines = [f"🏁 <b>{star}Gone{age}</b> · {e(kind)} · {e(row['town'])}{code_tag(code)}"]
+    price = f"Last price {czk(row['price'])}" if row["price"] else "Last price on request"
+    if story := price_story(steps):
+        price += f" ({story})"
+    lines.append(price)
+    if score is not None:
+        lines.append(f"You got it as {score}/100{' 🔥' if score >= hot_score else ''}")
+    lines.append("Most likely sold or withdrawn. — " + link(row["url"], DISPLAY_NAMES.get(row["source"], row["source"])))
+    return "\n".join(lines)
+
+
+def format_favorite_change(lst: Listing, old_price: int, steps: list[tuple[int, str]]) -> str:
+    """⭐ oblíbená nemovitost změnila cenu (i o méně než PRICE_DROP_ALERT_PCT)."""
+    pct = ((lst.price or 0) / old_price - 1) * 100 if old_price else 0
+    lines = [f"⭐ <b>Favourite{code_tag(lst.code)}: {czk(old_price)} → {czk(lst.price)} ({pct:+.0f} %)</b>".replace("-", "−"),
+             f"{e(describe_kind(lst))} · {e(lst.town)}"]
+    if story := price_story(steps):
+        lines.append(f"📉 {story}" if steps[-1][0] < steps[0][0] else f"💲 {story}")
+    lines.append("🔗 " + link(lst.url, DISPLAY_NAMES.get(lst.source, lst.source)))
+    return "\n".join(lines)
 
 
 def format_summary_line(lst: Listing, res: ScoreResult) -> str:
@@ -206,7 +253,7 @@ def format_summary_line(lst: Listing, res: ScoreResult) -> str:
         bits.append(f"{lst.area_m2:g} m²")
     if res.estimate:
         bits.append(f"flip {czk_short(res.estimate.margin)}")
-    return f"{icon} {' · '.join(bits)} — {link(lst.url, 'open')}"
+    return f"{icon} {' · '.join(bits)}{code_tag(lst.code)} — {link(lst.url, 'open')}"
 
 
 class Notifier:
@@ -217,7 +264,7 @@ class Notifier:
         self.timeout = timeout
 
     def send(self, text: str, *, similar_key: tuple[str, str] | None = None) -> bool:
-        """`similar_key` = (source, external_id): pod zprávu přidá tlačítko 🔎 Similar nearby."""
+        """`similar_key` = (source, external_id): pod zprávu přidá tlačítka 🔎 Similar nearby a ⭐ Save."""
         if len(text) > MAX_LEN:
             text = text[: MAX_LEN - 1] + "…"
         if self.dry_run:
@@ -225,9 +272,11 @@ class Notifier:
             return True
         data = {"chat_id": self.chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": "true"}
         if similar_key:
-            callback = f"{SIMILAR_PREFIX}{similar_key[0]}:{similar_key[1]}"[:64]   # limit Telegramu 64 B
-            data["reply_markup"] = json.dumps(
-                {"inline_keyboard": [[{"text": "🔎 Similar nearby", "callback_data": callback}]]})
+            ref = f"{similar_key[0]}:{similar_key[1]}"
+            data["reply_markup"] = json.dumps({"inline_keyboard": [[   # limit Telegramu 64 B na callback
+                {"text": "🔎 Similar nearby", "callback_data": f"{SIMILAR_PREFIX}{ref}"[:64]},
+                {"text": "⭐ Save", "callback_data": f"{FAV_PREFIX}{ref}"[:64]},
+            ]]})
         for attempt in range(2):
             try:
                 resp = httpx.post(API_URL.format(token=self.token), data=data, timeout=self.timeout)

@@ -9,6 +9,8 @@ Použití:
   python main.py latest [N] nejnovějších N inzerátů znovu oskórovaných proti dnešnímu trhu
   python main.py drops [D]  největší zlevnění za posledních D dní (výchozí 7)
   python main.py stale [D]  nabídky online aspoň D dní (výchozí 60), nejvíc zlevněné první
+  python main.py best [N]   nejlepších N nabídek, které jsou pořád online (oskórované dnes)
+  python main.py find 1234  nabídka #1234 + hotové a podobné v okolí
   python main.py towns      typická cena za m² v každé sledované obci (z uložených inzerátů)
   python main.py report     pošle tabulku cen po obcích na Telegram hned (jinak chodí sama 1× týdně)
   python main.py test-telegram   pošle zkušební zprávu (ověření tokenu a chat_id)
@@ -26,7 +28,7 @@ import sys
 import time
 from collections import Counter
 
-from flip import export, insights, latest
+from flip import export, insights, latest, lookup
 from flip.bot import Bot
 from flip.config import FlipConfig, load_config
 from flip.market import town_averages
@@ -63,6 +65,7 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
     export.register(bot)            # /data, /status, /help v Telegramu
     latest.register(bot)            # /latest
     insights.register(bot)          # /drops, /stale
+    lookup.register(bot)            # /find, /fav, /unfav, /favs, /best, tlačítko ⭐ Save
     export.announce_update(cfg, notifier)
     bot.start_background()          # odpovídá do pár sekund, i během dlouhého běhu zdroje
     log.info("Startuji | zdroje=%s | obce=%s | rozpočet=%s | dry_run=%s",
@@ -211,6 +214,16 @@ def main(argv: list[str]) -> int:
         days = int(argv[2]) if len(argv) > 2 and argv[2].isdigit() else default
         with Store(cfg.db_path) as store:
             text = (insights.drops_text if command == "drops" else insights.stale_text)(store, cfg, days)
+        print(re.sub(r"<[^>]+>", "", text))
+        return 0
+    if command in ("best", "find"):
+        arg = int(argv[2].lstrip("#")) if len(argv) > 2 and argv[2].lstrip("#").isdigit() else None
+        if command == "find" and arg is None:
+            print("usage: python main.py find 1234")
+            return 2
+        with Store(cfg.db_path) as store:
+            text = (lookup.best_text(store, cfg, arg or lookup.BEST_DEFAULT) if command == "best"
+                    else lookup.find_text(store, cfg, arg))
         print(re.sub(r"<[^>]+>", "", text))
         return 0
     if command == "towns":

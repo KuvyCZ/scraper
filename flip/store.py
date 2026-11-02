@@ -9,6 +9,11 @@ Tabulky:
                  počítá se jen u zdrojů, které procházejí celou nabídku (FetchResult.full_scan).
                  `seen_at_start` = 1, když byl inzerát na webu už při spuštění sledování
                  (první běh zdroje / nově přidané obce) -> "online aspoň N dní", ne "nový".
+                 `detail_fetched_at` = kdy se naposledy četl detail (popis, stav); po
+                 DETAIL_REFRESH_DAYS se u sledovaných obcí přečte znovu (prodejce připíše "sleva").
+                 `code` = krátké číslo inzerátu pro Telegram ("/find 1234", "/fav 1234"); zpráva
+                 ukazuje číslo kanonického inzerátu shluku.
+  favorites      oblíbené nemovitosti (klíč shluku) — zpráva při KAŽDÉ změně ceny a při zmizení.
   price_history  každá ZMĚNA ceny (ne každý běh) -> signál "zlevnilo".
   notified       co už šlo na Telegram, klíčované KANONICKÝM inzerátem shluku ->
                  stejná nemovitost z jiného portálu nepřijde podruhé; drží poslední
@@ -34,6 +39,8 @@ from flip.towns import _PSC_RE, DEFAULT_PSC, match_town, match_town_by_psc, norm
 GONE_TRACKED_SOURCES = ("sreality", "realingo", "reality_sumperk")
 GONE_AFTER_HOURS = 48            # chybí aspoň tak dlouho -> zmizel (ne jen výpadek jednoho běhu)
 GONE_MAX_SHARE = 0.30            # víc než 30 % nabídky naráz = chyba webu, ne vlna prodejů
+DETAIL_REFRESH_DAYS = 14         # detail inzerátu ve sledované obci znovu po 2 týdnech
+DETAIL_REFRESH_PER_RUN = 30      # max znovu-čtených detailů na běh zdroje (běh zůstane krátký)
 
 log = logging.getLogger("flip.store")
 
@@ -62,6 +69,8 @@ CREATE TABLE IF NOT EXISTS listings (
     last_seen           TEXT NOT NULL,
     gone_at             TEXT,
     seen_at_start       INTEGER NOT NULL DEFAULT 0,
+    detail_fetched_at   TEXT,
+    code                INTEGER,
     PRIMARY KEY (source, external_id)
 );
 
@@ -87,6 +96,12 @@ CREATE TABLE IF NOT EXISTS source_health (
     baseline_done        INTEGER NOT NULL DEFAULT 0,
     last_run_at          TEXT,
     last_error           TEXT
+);
+
+CREATE TABLE IF NOT EXISTS favorites (
+    cluster_key TEXT PRIMARY KEY,
+    added_at    TEXT NOT NULL,
+    note        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS town_stats (
@@ -155,6 +170,26 @@ class Store:
         if version < 4:
             self._add_history_columns()
             self.conn.execute("PRAGMA user_version = 4")
+        if version < 5:
+            cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(listings)")}
+            if "detail_fetched_at" not in cols:
+                self.conn.execute("ALTER TABLE listings ADD COLUMN detail_fetched_at TEXT")
+            # detail se dosud četl jen při prvním spatření
+            self.conn.execute("UPDATE listings SET detail_fetched_at = first_seen "
+                              "WHERE detail_fetched_at IS NULL AND description IS NOT NULL")
+            self.conn.execute("PRAGMA user_version = 5")
+        if version < 6:
+            cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(listings)")}
+            if "code" not in cols:
+                self.conn.execute("ALTER TABLE listings ADD COLUMN code INTEGER")
+            rows = self.conn.execute(
+                "SELECT source, external_id FROM listings WHERE code IS NULL ORDER BY first_seen, source, external_id"
+            ).fetchall()
+            start = self.conn.execute("SELECT COALESCE(MAX(code), 0) FROM listings").fetchone()[0]
+            self.conn.executemany("UPDATE listings SET code = ? WHERE source = ? AND external_id = ?",
+                                  [(start + i + 1, r["source"], r["external_id"]) for i, r in enumerate(rows)])
+            self.conn.execute("PRAGMA user_version = 6")
+        self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_listings_code ON listings (code)")
 
     def _add_history_columns(self) -> None:
         """gone_at + seen_at_start pro starší DB. Doplní se potichu (žádné zprávy):
@@ -271,6 +306,18 @@ class Store:
         rows = self.conn.execute("SELECT external_id FROM listings WHERE source = ?", (source,)).fetchall()
         return {r["external_id"] for r in rows}
 
+    def refresh_ids(self, source: str, days: int = DETAIL_REFRESH_DAYS,
+                    limit: int = DETAIL_REFRESH_PER_RUN) -> set[str]:
+        """Inzeráty ve sledovaných obcích, pořád online, s detailem starším než N dní
+        (nejstarší první) — jejich popis a stav se přečtou znovu."""
+        cutoff = iso(self.now() - timedelta(days=days))
+        rows = self.conn.execute(
+            """SELECT external_id FROM listings
+               WHERE source = ? AND town IS NOT NULL AND gone_at IS NULL
+                 AND (detail_fetched_at IS NULL OR detail_fetched_at < ?)
+               ORDER BY COALESCE(detail_fetched_at, first_seen) LIMIT ?""", (source, cutoff, limit)).fetchall()
+        return {r["external_id"] for r in rows}
+
     def upsert(self, lst: Listing, *, seen_at_start: bool = False) -> tuple[sqlite3.Row | None, bool]:
         """Uloží inzerát. Vrací (předchozí řádek nebo None, změnila se cena?).
 
@@ -285,11 +332,13 @@ class Store:
             self.conn.execute(
                 """INSERT INTO listings (source, external_id, url, kind, subtype, price, area_m2, land_m2,
                        town, locality, description, building_condition, energy_rating, gps_lat, gps_lon,
-                       parse_confidence, first_seen, last_seen, seen_at_start)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       parse_confidence, first_seen, last_seen, seen_at_start, detail_fetched_at, code)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                           (SELECT COALESCE(MAX(code), 0) + 1 FROM listings))""",
                 (lst.source, lst.external_id, lst.url, lst.kind, lst.subtype, lst.price, lst.area_m2,
                  lst.land_m2, lst.town, lst.locality, lst.description, lst.building_condition,
-                 lst.energy_rating, lst.gps_lat, lst.gps_lon, lst.parse_confidence, now, now, int(seen_at_start)),
+                 lst.energy_rating, lst.gps_lat, lst.gps_lon, lst.parse_confidence, now, now, int(seen_at_start),
+                 now if lst.detail_fetched else None),
             )
             self._record_price(lst, now)
             self.conn.commit()
@@ -303,11 +352,12 @@ class Store:
                    building_condition = COALESCE(?, building_condition),
                    energy_rating = COALESCE(?, energy_rating),
                    gps_lat = COALESCE(?, gps_lat), gps_lon = COALESCE(?, gps_lon),
-                   parse_confidence = ?, last_seen = ?, gone_at = NULL
+                   parse_confidence = ?, last_seen = ?, gone_at = NULL,
+                   detail_fetched_at = COALESCE(?, detail_fetched_at)
                WHERE source = ? AND external_id = ?""",
             (lst.url, lst.kind, lst.subtype, lst.price, lst.area_m2, lst.land_m2, lst.town, lst.locality,
              lst.description, lst.building_condition, lst.energy_rating, lst.gps_lat, lst.gps_lon,
-             lst.parse_confidence, now, lst.source, lst.external_id),
+             lst.parse_confidence, now, now if lst.detail_fetched else None, lst.source, lst.external_id),
         )
         price_changed = prev["price"] != lst.price
         if price_changed:
@@ -315,13 +365,13 @@ class Store:
         self.conn.commit()
         return prev, price_changed
 
-    def mark_gone(self, source: str, kinds: Iterable[str]) -> int:
+    def mark_gone(self, source: str, kinds: Iterable[str]) -> list[sqlite3.Row]:
         """Po ÚPLNÉM průchodu zdroje: co v něm chybí aspoň GONE_AFTER_HOURS, z webu zmizelo.
         Když by to bylo víc než GONE_MAX_SHARE nabídky naráz, je to spíš chyba webu ->
-        nic se neoznačí. Vrací počet nově zmizelých."""
+        nic se neoznačí. Vrací nově zmizelé řádky."""
         kinds = list(kinds)
         if source not in GONE_TRACKED_SOURCES or not kinds:
-            return 0
+            return []
         marks = ",".join("?" * len(kinds))
         cutoff = iso(self.now() - timedelta(hours=GONE_AFTER_HOURS))
         online = self.conn.execute(
@@ -329,16 +379,23 @@ class Store:
             (source, *kinds)).fetchone()[0]
         where = f"source = ? AND gone_at IS NULL AND kind IN ({marks}) AND last_seen < ?"
         params = (source, *kinds, cutoff)
-        n = self.conn.execute(f"SELECT COUNT(*) FROM listings WHERE {where}", params).fetchone()[0]
+        rows = self.conn.execute(f"SELECT * FROM listings WHERE {where}", params).fetchall()
+        n = len(rows)
         if n == 0:
-            return 0
+            return []
         if n > 5 and n > GONE_MAX_SHARE * online:
             log.warning("%s: %d z %d inzerátů naráz chybí — spíš chyba webu, neoznačuji jako zmizelé",
                         source, n, online)
-            return 0
+            return []
         self.conn.execute(f"UPDATE listings SET gone_at = last_seen WHERE {where}", params)
         self.conn.commit()
-        return n
+        return [self.get(r["source"], r["external_id"]) for r in rows]
+
+    def cluster_still_online(self, key: str, except_key: tuple[str, str]) -> bool:
+        """Je stejná nemovitost pořád k vidění na jiném webu (viděná za posledních 48 h)?"""
+        cutoff = iso(self.now() - timedelta(hours=GONE_AFTER_HOURS))
+        return any(m["gone_at"] is None and m["last_seen"] >= cutoff
+                   for m in self.cluster_members(key) if (m["source"], m["external_id"]) != except_key)
 
     def price_steps(self, source: str, external_id: str) -> list[tuple[int, str]]:
         """Ceny v čase bez "cena na dotaz" a bez opakování: [(cena, kdy), …]."""
@@ -401,6 +458,45 @@ class Store:
             return row["dup_of"]
         return cluster_key(source, external_id)
 
+    def code_of(self, key: str) -> int | None:
+        """Krátké číslo nemovitosti = číslo kanonického inzerátu shluku."""
+        source, _, external_id = key.partition(":")
+        row = self.get(source, external_id)
+        return row["code"] if row is not None else None
+
+    def by_code(self, code: int) -> sqlite3.Row | None:
+        """Inzerát podle čísla; u duplicity rovnou kanonický inzerát shluku."""
+        row = self.conn.execute("SELECT * FROM listings WHERE code = ?", (code,)).fetchone()
+        if row is not None and row["dup_of"]:
+            source, _, external_id = row["dup_of"].partition(":")
+            return self.get(source, external_id) or row
+        return row
+
+    # ------------------------------------------------------------------ #
+    # Oblíbené                                                           #
+    # ------------------------------------------------------------------ #
+
+    def add_favorite(self, key: str, note: str | None = None) -> bool:
+        """False = už tam byla (poznámka se jen aktualizuje, když je zadaná)."""
+        exists = self.is_favorite(key)
+        self.conn.execute(
+            """INSERT INTO favorites (cluster_key, added_at, note) VALUES (?,?,?)
+               ON CONFLICT(cluster_key) DO UPDATE SET note = COALESCE(excluded.note, favorites.note)""",
+            (key, iso(self.now()), note))
+        self.conn.commit()
+        return not exists
+
+    def remove_favorite(self, key: str) -> bool:
+        n = self.conn.execute("DELETE FROM favorites WHERE cluster_key = ?", (key,)).rowcount
+        self.conn.commit()
+        return n > 0
+
+    def is_favorite(self, key: str) -> bool:
+        return self.conn.execute("SELECT 1 FROM favorites WHERE cluster_key = ?", (key,)).fetchone() is not None
+
+    def favorites(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM favorites ORDER BY added_at").fetchall()
+
     def cluster_members(self, key: str) -> list[sqlite3.Row]:
         source, _, external_id = key.partition(":")
         return self.conn.execute(
@@ -415,13 +511,31 @@ class Store:
     def market_rows(self, *, kind: str, window_days: int, in_area_only: bool) -> list[sqlite3.Row]:
         """Inzeráty pro mediány: daný typ, viděné v posledních N dnech, bez duplicit."""
         since = iso(self.now() - timedelta(days=window_days))
-        sql = """SELECT source, external_id, kind, price, area_m2, land_m2, building_condition, description, town
+        sql = """SELECT source, external_id, kind, price, area_m2, land_m2, building_condition, description, town,
+                        first_seen, gone_at, seen_at_start
                  FROM listings
                  WHERE kind = ? AND last_seen >= ? AND dup_of IS NULL
                    AND price IS NOT NULL AND price > 0 AND area_m2 IS NOT NULL AND area_m2 > 0"""
         if in_area_only:
             sql += " AND town IS NOT NULL"
         return self.conn.execute(sql, (kind, since)).fetchall()
+
+    def sale_rows(self, *, kind: str, days: int = 365) -> list[sqlite3.Row]:
+        """Zmizelé inzeráty (nejspíš prodané) za posledních N dní s první a poslední cenou —
+        z nich se měří, o kolik nabídková cena typicky klesne, než se nemovitost prodá.
+        Jen ty, které jsme viděli od začátku (u starších neznáme původní cenu)."""
+        since = iso(self.now() - timedelta(days=days))
+        marks = ",".join("?" * len(GONE_TRACKED_SOURCES))
+        return self.conn.execute(
+            f"""SELECT l.source, l.external_id, l.town, l.price,
+                       (SELECT p.price FROM price_history p WHERE p.source = l.source
+                          AND p.external_id = l.external_id AND p.price IS NOT NULL
+                        ORDER BY p.seen_at, p.rowid LIMIT 1) AS first_price
+                FROM listings l
+                WHERE l.kind = ? AND l.gone_at >= ? AND l.dup_of IS NULL AND l.price IS NOT NULL
+                  AND l.seen_at_start = 0 AND l.source IN ({marks})""",
+            (kind, since, *GONE_TRACKED_SOURCES),
+        ).fetchall()
 
     # ------------------------------------------------------------------ #
     # Notifikace                                                         #

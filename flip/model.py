@@ -46,6 +46,12 @@ class Listing:
     parse_confidence: str = "high"
     scraped_at: str = field(default_factory=utc_now_iso)
 
+    # krátké číslo nemovitosti pro Telegram (/find 1234) — vyplní pipeline z DB
+    code: int | None = None
+
+    # True = tento běh stáhl detail (popis/stav) -> uloží se detail_fetched_at
+    detail_fetched: bool = False
+
     # vyplní pipeline: (source, url) dalších portálů se stejnou nemovitostí
     duplicate_sources: list[tuple[str, str]] = field(default_factory=list)
 

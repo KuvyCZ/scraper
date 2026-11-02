@@ -123,7 +123,8 @@ def _estimate(lst: Listing, market: MarketView, cfg: FlipConfig) -> FlipEstimate
     arv = market.arv_ppm2 * lst.area_m2
     reno = cfg.reno_cost_m2(lst.kind) * lst.area_m2
     holding = cfg.holding_cost_pct * (lst.price + reno)
-    margin = arv * cfg.sale_factor - lst.price - reno - holding
+    sale_factor = market.sale.sale_factor if market.sale else cfg.sale_factor
+    margin = arv * sale_factor - lst.price - reno - holding
     invested = lst.price + reno + holding
     return FlipEstimate(
         arv=round(arv), reno_cost=round(reno), holding_cost=round(holding),

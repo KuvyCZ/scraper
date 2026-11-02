@@ -35,7 +35,7 @@ class HistoryBase(unittest.TestCase):
 
     def run_src(self, listings, *, source="sreality", full_scan=True):
         result = FetchResult(list(listings), len(listings) or 1, full_scan=full_scan)
-        fake = SimpleNamespace(fetch_listings=lambda cfg, known: result)
+        fake = SimpleNamespace(fetch_listings=lambda cfg, known, *refresh: result)
         with mock.patch.dict(pipeline.SOURCES, {source: fake}):
             return pipeline.run_source(source, self.cfg, self.notifier, self.store)
 

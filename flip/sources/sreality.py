@@ -143,7 +143,7 @@ def _iter_search(client: _Client, region_id: int, category: int,
             return
 
 
-def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
+def fetch_listings(cfg: FlipConfig, known_ids: set[str], refresh_ids: set[str] = frozenset()) -> FetchResult:
     categories = [c for c, (kind, _) in _MAIN.items() if cfg.wants_kind(kind)]
     client = _Client()
     raw_count = 0
@@ -171,9 +171,13 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
         elif todo:
             log.info("Sreality: stahuji %d detailů (~%d min)…", min(len(todo), DETAIL_LIMIT_PER_RUN),
                      round(min(len(todo), DETAIL_LIMIT_PER_RUN) * RATE_LIMIT_S / 60))
-        for lst in todo[:DETAIL_LIMIT_PER_RUN]:
+        # znovu-čtení starých detailů jen do zbytku stropu; nikdy se neodkládají (známé se vrací vždy)
+        refresh = [x for x in listings if x.external_id in refresh_ids and x.external_id in known_ids]
+        spare = max(0, DETAIL_LIMIT_PER_RUN - len(todo)) if cfg.fetch_details else 0
+        for lst in todo[:DETAIL_LIMIT_PER_RUN] + refresh[:spare]:
             try:
                 enrich_detail(lst, client.get(DETAIL_URL.format(hash_id=lst.external_id)))
+                lst.detail_fetched = True
             except Exception as exc:  # noqa: BLE001 – chybný detail nezahodí inzerát
                 log.warning("Sreality: detail %s selhal: %s", lst.external_id, exc)
         if len(todo) > DETAIL_LIMIT_PER_RUN:

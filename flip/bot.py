@@ -37,8 +37,10 @@ MIN_IN_TOWN = 3
 POLL_TIMEOUT_S = 50               # Telegram drží spojení max ~50 s
 
 
-def similar_listings(store: Store, row: sqlite3.Row, window_days: int) -> tuple[str | None, list[sqlite3.Row]]:
-    """(kde se hledalo, srovnatelné inzeráty seřazené podle podobnosti plochy)."""
+def similar_listings(store: Store, row: sqlite3.Row, window_days: int,
+                     keep: Callable[[sqlite3.Row], bool] | None = None) -> tuple[str | None, list[sqlite3.Row]]:
+    """(kde se hledalo, srovnatelné inzeráty seřazené podle podobnosti plochy).
+    `keep` = jen některé (např. jen hotové po rekonstrukci)."""
     if not row["area_m2"]:
         return None, []
     band = AREA_BAND.get(row["kind"], 0.30)
@@ -54,6 +56,7 @@ def similar_listings(store: Store, row: sqlite3.Row, window_days: int) -> tuple[
         )
         if f'{r["source"]}:{r["external_id"]}' != own_cluster
         and SANE_PPM2[0] <= r["price"] / r["area_m2"] <= SANE_PPM2[1]
+        and (keep is None or keep(r))
     ]
     in_town = [r for r in candidates if r["town"] == row["town"]]
     if len(in_town) >= MIN_IN_TOWN or not okres_of(row["town"]):
@@ -64,6 +67,18 @@ def similar_listings(store: Store, row: sqlite3.Row, window_days: int) -> tuple[
         picked = [r for r in candidates if TOWN_INFO.get(r["town"]) and TOWN_INFO[r["town"]].okres == okres]
     picked.sort(key=lambda r: abs(r["area_m2"] - row["area_m2"]))
     return where, picked
+
+
+def similar_line(r: sqlite3.Row, own_town: str | None) -> str:
+    cond = row_condition(r["building_condition"], r["description"])
+    tag = {"renovated": " · renovated", "needs_reno": " · to renovate"}.get(cond, "")
+    town = f" · {e(r['town'])}" if r["town"] != own_town else ""
+    if r["gone_at"]:
+        tag += f" · gone {short_date(r['gone_at'])}"
+    code = f" · #{r['code']}" if r["code"] else ""
+    return (f"• {e(r['subtype'] or '')} {r['area_m2']:g} m² · {czk(r['price'])} · "
+            f"{czk(r['price'] / r['area_m2'])}/m²{tag}{town}{code} — "
+            f"{link(r['url'], DISPLAY_NAMES.get(r['source'], r['source']))}")
 
 
 def format_similar(row: sqlite3.Row, where: str | None, similar: list[sqlite3.Row]) -> str:
@@ -82,16 +97,7 @@ def format_similar(row: sqlite3.Row, where: str | None, similar: list[sqlite3.Ro
         lines.append(f"This one: {czk(own)}/m² ({diff:+.0f} % vs typical)")
     lines.append("")
     for r in similar[:SIMILAR_LIMIT]:
-        cond = row_condition(r["building_condition"], r["description"])
-        tag = {"renovated": " · renovated", "needs_reno": " · to renovate"}.get(cond, "")
-        town = f" · {e(r['town'])}" if r["town"] != row["town"] else ""
-        if r["gone_at"]:
-            tag += f" · gone {short_date(r['gone_at'])}"
-        lines.append(
-            f"• {e(r['subtype'] or '')} {r['area_m2']:g} m² · {czk(r['price'])} · "
-            f"{czk(r['price'] / r['area_m2'])}/m²{tag}{town} — "
-            f"{link(r['url'], DISPLAY_NAMES.get(r['source'], r['source']))}"
-        )
+        lines.append(similar_line(r, row["town"]))
     if len(similar) > SIMILAR_LIMIT:
         lines.append(f"…and {len(similar) - SIMILAR_LIMIT} more")
     lines.append("<i>Asking prices, not sale prices. \"gone\" = no longer online, most likely sold.</i>")
@@ -154,6 +160,10 @@ class Bot:
                     return
         elif message := update.get("message"):
             text = (message.get("text") or "").strip()
+            if text.lstrip("#").isdigit() and "find" in self.commands and self._ours(message.get("chat")):
+                # jen číslo inzerátu ("1234" nebo "#1234") = /find 1234
+                self.commands["find"]({**message, "text": f"/find {text.lstrip('#')}"}, store, self.cfg, self.notifier)
+                return
             if not text.startswith("/") or not self._ours(message.get("chat")):
                 return
             name = text[1:].split()[0].split("@")[0].lower() if len(text) > 1 else ""

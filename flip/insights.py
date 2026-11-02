@@ -37,6 +37,7 @@ class Item:
     steps: list[tuple[int, str]]
     first_seen: str            # nejstarší spatření v celém shluku (stejná nemovitost na víc webech)
     before_start: bool         # byla online už při spuštění sledování -> dny jsou "aspoň"
+    code: int | None = None    # číslo nemovitosti (kanonického inzerátu shluku)
 
     @property
     def cuts(self) -> int:
@@ -72,8 +73,9 @@ def _items(store: Store, cfg: FlipConfig) -> list[Item]:
         best = max(members, key=lambda m: (len(price_steps(history.get((m["source"], m["external_id"]), []))),
                                            m["dup_of"] is None))
         earliest = min(members, key=lambda m: m["first_seen"])
+        canonical = next((m for m in members if m["dup_of"] is None), members[0])
         out.append(Item(best, price_steps(history.get((best["source"], best["external_id"]), [])),
-                        earliest["first_seen"], bool(earliest["seen_at_start"])))
+                        earliest["first_seen"], bool(earliest["seen_at_start"]), canonical["code"]))
     return out
 
 
@@ -86,7 +88,8 @@ def _line(it: Item, cfg: FlipConfig, extra: str) -> str:
         bits.append(f"{vs:+.0f} % vs town per m²".replace("-", "−"))
     if r["price"] and r["price"] > cfg.price_max:
         bits.append("💸 over budget")
-    return f"• {extra} · {' · '.join(bits)} — {link(r['url'], DISPLAY_NAMES.get(r['source'], r['source']))}"
+    code = f" · #{it.code}" if it.code else ""
+    return f"• {extra} · {' · '.join(bits)}{code} — {link(r['url'], DISPLAY_NAMES.get(r['source'], r['source']))}"
 
 
 # ---------------------------------------------------------------------- #

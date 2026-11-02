@@ -86,6 +86,8 @@ python main.py towns              # typical price per m² in each town
 python main.py report             # send the weekly town-price table to Telegram now
 python main.py drops 14           # biggest price cuts in the last 14 days
 python main.py stale 60           # listings online 60+ days, most cut first
+python main.py best 10            # best listings still online, re-scored today
+python main.py find 1234          # listing #1234 with renovated and similar ones nearby
 ```
 
 ### Synology NAS (Container Manager)
@@ -119,6 +121,12 @@ Write these to the bot (it only answers your own `TELEGRAM_CHAT_ID`):
 | `/latest` | the newest listings re-scored against today's prices (`/latest 15`) |
 | `/drops` | the biggest price cuts in your towns in the last 7 days, also ones too small for a 📉 message or over budget (`/drops 14`) |
 | `/stale` | listings online 60+ days, most cut first: sellers most likely to take a lower offer (`/stale 30`) |
+| `/best` | the best listings still online, re-scored against today's prices (`/best 15`) |
+| `/find 1234` | listing #1234 re-scored, renovated listings of similar size nearby (what it could sell for after renovation) and similar ones. Sending just `1234` works too |
+| `/fav 1234 note` | save to favourites (or tap ⭐ Save under any listing). Favourites report **every** price change and when they disappear |
+| `/favs`, `/unfav 1234` | list favourites with their current price / remove one |
+
+Every listing has a short number (`#1234`) in messages, `/drops`, `/stale`, `/best` and the Excel file.
 | `/help` | the list of commands |
 
 ### What the history is used for
@@ -128,9 +136,21 @@ Write these to the bot (it only answers your own `TELEGRAM_CHAT_ID`):
   most likely sold or withdrawn. Bazoš can't tell this, it only reads the newest pages.
 - **Price story** in every message: `3.79M → 3.55M → 3.45M in 18 days (2 cuts, −9 %)`.
   Listings that were already online when watching started say "online 28+ days".
+- **🏁 Gone note**: when a listing you were sent (or a favourite) disappears and isn't on another
+  site either, one line: how long it was online and its last price.
+- **Fairer comparisons**: listings that went offline within 60 days (most likely sold) count 1.5×,
+  listings sitting 120+ days count 0.5×. Houses are compared with houses on similar land first.
+- **Measured haggling**: once 30+ listings watched from the start have gone, the profit estimate uses
+  how much their asking price really fell (per okres, else kraj) plus 5 % haggling, instead of the
+  fixed `SALE_FACTOR`.
+- **Fresh details**: listings in your towns get their description re-read every 2 weeks
+  (30 per run), so a new "sleva" or condition shows up.
+- **Cheaper on another site**: the same flat on another site counts as a duplicate even with up to
+  15 % price difference when both name the same street; if it's cheaper there, you get a message.
 - **Weekly table**: price change vs ~3 months ago (or ~4 weeks, or last week while there is
   no older table yet), plus a *market speed* table per town: new, gone, price cuts and the
-  typical number of days a listing stays online.
+  typical number of days a listing stays online. Once there's enough data, a *score check* says
+  whether the 🔥 listings really went faster than the rest.
 
 The bot answers between site checks, so during a long run (the first Sreality pass) a reply
 can take a few minutes.
@@ -161,6 +181,7 @@ category codes it doesn't recognise.
 | `flip/notifier.py` | Telegram messages |
 | `flip/export.py` | `/data`, `/status`, `/help` commands and the "updated" message |
 | `flip/insights.py` | `/drops` and `/stale` from the price history |
+| `flip/lookup.py` | `/find`, `/best`, favourites (`/fav`, `/favs`, `/unfav`, ⭐ Save) |
 | `flip/report.py` | weekly town-price table and market speed |
 | `tests/` | `python -m unittest discover -s tests -t .` (no extra dependencies) |
 | `legacy/` | the old Olomoucký-kraj monitor, archived and not used |
