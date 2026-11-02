@@ -17,6 +17,7 @@ from flip.model import Listing
 from flip.scoring import ScoreResult
 from flip.sources import DISPLAY_NAMES
 from flip.text import RISK_LABELS, TAGGED_HOUSE_SUBTYPES
+from flip.towns import normalize
 
 log = logging.getLogger("flip.notifier")
 
@@ -117,7 +118,11 @@ def _body(lst: Listing, res: ScoreResult) -> list[str]:
         lines.append("❓ size/layout not clearly stated — check the listing")
 
     if lst.locality:
-        lines.append(f"📍 {e(lst.locality)}")
+        # Bazoš píše u inzerátu často "Šumperk", i když PSČ patří jiné obci — ukaž, co platí
+        if lst.town and normalize(lst.town) not in normalize(lst.locality):
+            lines.append(f"📍 {e(lst.town)} (site says: {e(lst.locality)})")
+        else:
+            lines.append(f"📍 {e(lst.locality)}")
     src = link(lst.url, DISPLAY_NAMES.get(lst.source, lst.source))
     if lst.duplicate_sources:
         others = ", ".join(link(u, DISPLAY_NAMES.get(s, s)) for s, u in lst.duplicate_sources)

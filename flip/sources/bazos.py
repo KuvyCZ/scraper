@@ -114,6 +114,7 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
     kw = {"robots": RobotsChecker(), "rate_limiter": RateLimiter()}
     out: list[Listing] = []
     raw_count = 0
+    no_psc = 0
 
     with httpx.Client(timeout=20.0, follow_redirects=True) as client:
         for category in selectors["categories"]:
@@ -131,6 +132,7 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                 if not items:
                     break
                 category_raw += len(items)
+                no_psc += sum(1 for item in items if not item.get("psc"))
                 for item in items:
                     lst = to_listing(item, kind, selectors["base_url"], cfg.bazos_psc)
                     if lst is None or not lst.in_area:
@@ -143,4 +145,8 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
             raw_count += category_raw
 
     log.info("Bazoš: %d inzerátů ve sledovaných obcích (z %d prošlých)", len(out), raw_count)
+    if raw_count and no_psc > raw_count / 2:
+        # bez PSČ se obec bere z názvu, a ten na Bazoši lže ("Šumperk" u Hanušovic)
+        log.error("Bazoš: %d z %d inzerátů bez PSČ — změnil se web? Obec se pak bere jen z názvu "
+                  "(zkontroluj psc_re v selectors/bazos.json)", no_psc, raw_count)
     return FetchResult(out, raw_count)

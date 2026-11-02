@@ -79,6 +79,23 @@ class RealingoDistrictsTests(unittest.TestCase):
         self.assertIn("Okres_Olomouc", urls[1])
 
 
+class BazosLocationTests(unittest.TestCase):
+    def test_message_shows_real_town_when_site_says_sumperk(self):
+        from flip.market import MarketView
+        from flip.notifier import format_new
+        from flip.scoring import score_listing
+        lst = make(source="bazos", town="Hanušovice", locality="Šumperk 788 33")
+        text = format_new(lst, score_listing(lst, MarketView(), config()))
+        self.assertIn("Hanušovice", text.splitlines()[0])
+        self.assertIn("📍 Hanušovice (site says: Šumperk 788 33)", text)
+
+    def test_town_from_psc_not_name(self):
+        from flip.sources import bazos
+        item = {"href": "/inzerat/1/x.php", "title": "Byt 2+1", "description": "56 m2", "price_text": "1 500 000 Kč",
+                "location_text": "Šumperk", "psc": "788 33"}
+        self.assertEqual(bazos.to_listing(item, "byt", "https://reality.bazos.cz").town, "Hanušovice")
+
+
 class StoredDataCleanupTests(unittest.TestCase):
     def test_old_rows_are_cleaned_once(self):
         path = os.path.join(tempfile.mkdtemp(), "flip.db")
