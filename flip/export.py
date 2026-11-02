@@ -45,6 +45,7 @@ HELP = {
     "data": "send the listings table (Excel), town prices and the full database",
     "status": "how many listings are stored and when each site last ran",
     "latest": "the newest listings re-scored against today's prices (e.g. /latest 15)",
+    "expensive": "rescan everything over your budget and show which are cheap per m² (e.g. /expensive 20)",
     "best": "the best listings still online, re-scored today (e.g. /best 15)",
     "find": "one listing by its number, with renovated and similar ones nearby (or just send 1234)",
     "fav": "save a listing to favourites, e.g. /fav 1234 nice street (or tap ⭐ Save)",
