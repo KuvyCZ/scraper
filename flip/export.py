@@ -39,6 +39,7 @@ CSV_COLUMNS = [
 HELP = {
     "data": "send the listings table (Excel), town prices and the full database",
     "status": "how many listings are stored and when each site last ran",
+    "latest": "the newest listings re-scored against today's prices (e.g. /latest 15)",
     "help": "list the commands",
 }
 

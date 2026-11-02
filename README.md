@@ -15,6 +15,8 @@ with `BAZOS_PSC` in `.env` (see `.env.example`).
 ## What you get on Telegram
 
 - **🏠 Every new listing** in your towns up to the budget (default 5 M Kč), with its score.
+- **💸 Pricier places too**, when their price per m² is at least 20 % below the town's typical
+  price (`OVER_BUDGET_DISCOUNT_PCT`; 0 = stick to the budget).
 - **🔥** for strong ones: score ≥ 65, or an estimated flip margin ≥ 20 %.
 - **📉 Price drop** when a listing you've already seen gets ≥ 3 % cheaper, including when the
   same property shows up cheaper on another site.
