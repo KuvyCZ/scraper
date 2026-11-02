@@ -20,6 +20,9 @@ with `BAZOS_PSC` in `.env` (see `.env.example`).
   same property shows up cheaper on another site.
 - **First run:** instead of 50+ messages you get one summary with the top 10 (🔥 ones also in full).
 - **⚠️ A warning** if a site fails 3 runs in a row (sent once, not every run).
+- **🔎 Similar nearby button** under each listing: tap it and the bot replies with comparable
+  listings in the same town (same type, similar size), their price per m² and how this one compares.
+  Works while the app is running (`python main.py`), only in your own chat.
 - **📊 Weekly town prices:** once a week, a table of the typical asking price per m² in each town
   (flats and houses, renovated vs. to renovate) with the change since last week. Each week is also
   added to `data/town_prices.csv`, which opens in Excel. Change with `TOWN_REPORT_DAYS`.

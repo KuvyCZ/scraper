@@ -15,11 +15,13 @@ class CapturingNotifier(Notifier):
         super().__init__("", "", dry_run=True)
         self.sent: list[str] = []
         self.fail = False
+        self.keys: list[tuple[str, str] | None] = []
 
-    def send(self, text: str) -> bool:
+    def send(self, text: str, *, similar_key=None) -> bool:
         if self.fail:
             return False
         self.sent.append(text)
+        self.keys.append(similar_key)
         return True
 
 

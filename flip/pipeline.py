@@ -123,14 +123,14 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
                 stats.duplicates += 1
             if stats.baseline:
                 baseline_items.append((lst, res))
-            elif notifier.send(format_new(lst, res)):
+            elif notifier.send(format_new(lst, res), similar_key=lst.key):
                 store.mark_notified(key, lst.price, res.score)
                 stats.new_sent += 1
             continue
 
         last = done["last_notified_price"]
         if lst.price and last and lst.price <= last * (1 - cfg.price_drop_alert_pct / 100):
-            if notifier.send(format_drop(lst, res, last)):
+            if notifier.send(format_drop(lst, res, last), similar_key=lst.key):
                 store.mark_notified(key, lst.price, res.score)
                 stats.drops_sent += 1
         elif key != cluster_key(*lst.key):
@@ -174,7 +174,7 @@ def _send_baseline(
         store.mark_notified(store.cluster_of(*lst.key), lst.price, res.score)
     # 🔥 kusy i s plným detailem, ať nezapadnou v shrnutí
     for lst, res in [x for x in ranked if x[1].hot][:HOT_DETAIL_ON_BASELINE]:
-        notifier.send(format_new(lst, res))
+        notifier.send(format_new(lst, res), similar_key=lst.key)
     return True
 
 

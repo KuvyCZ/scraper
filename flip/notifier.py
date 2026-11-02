@@ -7,6 +7,7 @@ zkusí znovu příští běh, protože se neoznačí jako odeslaná). dry_run je
 from __future__ import annotations
 
 import html
+import json
 import logging
 import time
 
@@ -22,6 +23,8 @@ from flip.towns import normalize
 log = logging.getLogger("flip.notifier")
 
 API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+METHOD_URL = "https://api.telegram.org/bot{token}/{method}"
+SIMILAR_PREFIX = "sim:"           # callback_data tlačítka "🔎 Similar nearby": sim:{source}:{external_id}
 MAX_LEN = 4000  # Telegram limit 4096
 
 
@@ -168,20 +171,21 @@ class Notifier:
         self.dry_run = dry_run
         self.timeout = timeout
 
-    def send(self, text: str) -> bool:
+    def send(self, text: str, *, similar_key: tuple[str, str] | None = None) -> bool:
+        """`similar_key` = (source, external_id): pod zprávu přidá tlačítko 🔎 Similar nearby."""
         if len(text) > MAX_LEN:
             text = text[: MAX_LEN - 1] + "…"
         if self.dry_run:
             log.info("[dry_run] Telegram:\n%s", text)
             return True
+        data = {"chat_id": self.chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": "true"}
+        if similar_key:
+            callback = f"{SIMILAR_PREFIX}{similar_key[0]}:{similar_key[1]}"[:64]   # limit Telegramu 64 B
+            data["reply_markup"] = json.dumps(
+                {"inline_keyboard": [[{"text": "🔎 Similar nearby", "callback_data": callback}]]})
         for attempt in range(2):
             try:
-                resp = httpx.post(
-                    API_URL.format(token=self.token),
-                    data={"chat_id": self.chat_id, "text": text, "parse_mode": "HTML",
-                          "disable_web_page_preview": "true"},
-                    timeout=self.timeout,
-                )
+                resp = httpx.post(API_URL.format(token=self.token), data=data, timeout=self.timeout)
                 if resp.status_code == 429 and attempt == 0:   # flood limit -> počkej, co Telegram řekne
                     retry_after = (resp.json().get("parameters") or {}).get("retry_after", 5)
                     time.sleep(min(int(retry_after), 60))
@@ -193,6 +197,17 @@ class Notifier:
                 log.error("Telegram selhal: %s", exc)
                 return False
         return False
+
+    def call(self, method: str, timeout: float | None = None, **params: object) -> dict | None:
+        """Obecné volání Bot API (getUpdates, answerCallbackQuery). None = chyba."""
+        try:
+            resp = httpx.post(METHOD_URL.format(token=self.token, method=method), data=params,
+                              timeout=timeout or self.timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Telegram %s selhal: %s", method, exc)
+            return None
 
     def send_failure_warning(self, source: str, failures: int, error: str) -> bool:
         return self.send(

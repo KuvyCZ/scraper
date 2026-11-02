@@ -22,6 +22,7 @@ import sys
 import time
 from collections import Counter
 
+from flip.bot import Bot
 from flip.config import FlipConfig, load_config
 from flip.market import town_averages
 from flip.notifier import Notifier, czk, czk_short
@@ -53,6 +54,7 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
     sources = cfg.active_sources
     intervals = {s: cfg.interval_minutes(s) * 60 for s in sources}
     next_due = {s: 0.0 for s in sources}
+    bot = Bot(cfg, notifier)
     log.info("Startuji | zdroje=%s | obce=%s | rozpočet=%s | dry_run=%s",
              sources, watched_towns(), czk(cfg.price_max), cfg.dry_run)
     while True:
@@ -75,7 +77,8 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
         if all(v == float("inf") for v in next_due.values()):
             return
         if not due:
-            time.sleep(max(1.0, min(next_due.values()) - time.monotonic()))
+            # mezi běhy bot odpovídá na tlačítko 🔎 Similar nearby
+            bot.wait(max(1.0, min(next_due.values()) - time.monotonic()))
 
 
 def run_once(cfg: FlipConfig, notifier: Notifier) -> int:
