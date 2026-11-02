@@ -106,7 +106,10 @@ class FlipConfig:
     bazos_psc: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_PSC))
 
     # --- co sledujeme --- #
-    price_max: int = 5_000_000        # rozpočet; dražší se ukládá (data o trhu), ale nealertuje
+    price_max: int = 5_000_000        # rozpočet; dražší alertuje jen jako výrazně levný za m² (viz níže)
+    # dražší než rozpočet přesto přijde, když je o >= tolik % levnější za m² než typická cena
+    # v obci (velké domy/byty za dobrou cenu); 0 = nad rozpočet nikdy
+    over_budget_discount_pct: float = 20.0
     area_min: float = 0.0             # 0 = bez omezení
     area_max: float = 0.0             # 0 = bez omezení
     include_flats: bool = True
@@ -180,6 +183,7 @@ def load_config(env_file: str = ".env") -> FlipConfig:
         realingo_districts=_get_list("REALINGO_DISTRICTS", list(OKRESY)),
         bazos_psc=parse_psc_map(_get("BAZOS_PSC")),
         price_max=_get_int("PRICE_MAX", 5_000_000),
+        over_budget_discount_pct=_get_float("OVER_BUDGET_DISCOUNT_PCT", 20.0),
         area_min=_get_float("AREA_MIN", 0.0),
         area_max=_get_float("AREA_MAX", 0.0),
         include_flats=_get_bool("INCLUDE_FLATS", True),

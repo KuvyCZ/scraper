@@ -130,8 +130,6 @@ def _handle_item(item: dict[str, Any], selectors: dict[str, Any], cfg: FlipConfi
         return None
     if lst.kind == "dum" and item.get("category") not in selectors.get("house_category_map", {}):
         unknown[f"house category={item.get('category')}"] += 1
-    if lst.price is not None and lst.price > cfg.price_max:
-        return None
     if cfg.fetch_details and lst.external_id not in known_ids:
         lst.description = _fetch_description(client, lst.url, lst.external_id, **kw)
         # kategorie "rodinný" u Realinga zahrnuje i chaty — popis to prozradí hned na začátku
@@ -163,7 +161,6 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                     break
                 raw_count += len(items)
 
-                page_in_budget = False
                 for item in items:
                     if not isinstance(item, dict):
                         continue
@@ -172,16 +169,8 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                     except Exception as exc:  # noqa: BLE001 – jeden vadný inzerát nesmí shodit celý zdroj
                         log.warning("Realingo: inzerát %s přeskočen: %s", item.get("id"), exc)
                         continue
-                    price = item.get("price")
-                    price = price.get("total") if isinstance(price, dict) else None
-                    if isinstance(price, (int, float)) and price <= cfg.price_max:
-                        page_in_budget = True
                     if lst is not None:
                         out.append(lst)
-
-                # řazeno od nejlevnějšího: celá strana nad rozpočtem -> dál už jen dražší
-                if page > 1 and not page_in_budget:
-                    break
 
     if unknown:
         log.info("Realingo: neznámé hodnoty (doplň do selectors/realingo.json): %s", dict(unknown.most_common(10)))

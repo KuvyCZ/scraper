@@ -46,13 +46,29 @@ class RunStats:
 
 
 def eligible(lst: Listing, cfg: FlipConfig) -> bool:
-    """Má se o tomhle inzerátu vůbec posílat zpráva?"""
-    return (
-        lst.in_area
-        and cfg.wants_kind(lst.kind)
-        and cfg.area_ok(lst.area_m2)
-        and (lst.price is None or lst.price <= cfg.price_max)
-    )
+    """Má se o tomhle inzerátu vůbec posílat zpráva? (cenu řeší within_budget po skórování)"""
+    return lst.in_area and cfg.wants_kind(lst.kind) and cfg.area_ok(lst.area_m2)
+
+
+def over_budget(lst: Listing, cfg: FlipConfig) -> bool:
+    return lst.price is not None and lst.price > cfg.price_max
+
+
+def within_budget(lst: Listing, res: ScoreResult, cfg: FlipConfig) -> bool:
+    """V rozpočtu, nebo dražší, ale výrazně levná za m² proti typické ceně v obci."""
+    if not over_budget(lst, cfg):
+        return True
+    return (cfg.over_budget_discount_pct > 0 and res.vs_median_pct is not None
+            and res.vs_median_pct <= -cfg.over_budget_discount_pct)
+
+
+def _with_budget_note(text: str, lst: Listing, res: ScoreResult, cfg: FlipConfig) -> str:
+    if not over_budget(lst, cfg) or res.vs_median_pct is None:
+        return text
+    head, _, rest = text.partition("\n")
+    note = (f"💸 Over your {cfg.price_max / 1_000_000:g}M budget, but {abs(res.vs_median_pct):.0f} % "
+            "below the typical price per m² here")
+    return f"{head}\n{note}\n{rest}"
 
 
 def _link_duplicate(store: Store, lst: Listing) -> None:
@@ -114,6 +130,8 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
         except Exception as exc:  # noqa: BLE001 – vadný inzerát nesmí shodit běh
             log.error("%s #%s: skórování selhalo: %s", source, lst.external_id, exc)
             continue
+        if not within_budget(lst, res, cfg):
+            continue
         stats.scored.append((lst, res))
 
         done = store.notified(key)
@@ -123,14 +141,14 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
                 stats.duplicates += 1
             if stats.baseline:
                 baseline_items.append((lst, res))
-            elif notifier.send(format_new(lst, res), similar_key=lst.key):
+            elif notifier.send(_with_budget_note(format_new(lst, res), lst, res, cfg), similar_key=lst.key):
                 store.mark_notified(key, lst.price, res.score)
                 stats.new_sent += 1
             continue
 
         last = done["last_notified_price"]
         if lst.price and last and lst.price <= last * (1 - cfg.price_drop_alert_pct / 100):
-            if notifier.send(format_drop(lst, res, last), similar_key=lst.key):
+            if notifier.send(_with_budget_note(format_drop(lst, res, last), lst, res, cfg), similar_key=lst.key):
                 store.mark_notified(key, lst.price, res.score)
                 stats.drops_sent += 1
         elif key != cluster_key(*lst.key):
@@ -162,7 +180,8 @@ def _send_baseline(
     ranked = sorted(items, key=lambda x: (x[1].hot, x[1].score or 0), reverse=True)[: cfg.baseline_top_n]
     lines = [f"👀 <b>Now watching {name}</b>"]
     if items:
-        lines.append(f"Found {flats} flats and {houses} houses in your towns under {cfg.price_max / 1_000_000:g}M Kč.")
+        lines.append(f"Found {flats} flats and {houses} houses in your towns under {cfg.price_max / 1_000_000:g}M Kč"
+                     " (or pricier but well below the town's price per m²).")
         lines.append(f"\n<b>Top {len(ranked)} right now:</b>")
         lines += [format_summary_line(lst, res) for lst, res in ranked]
         lines.append("\nFrom now on you'll get every new listing, plus a 📉 message when a price drops.")
@@ -174,7 +193,7 @@ def _send_baseline(
         store.mark_notified(store.cluster_of(*lst.key), lst.price, res.score)
     # 🔥 kusy i s plným detailem, ať nezapadnou v shrnutí
     for lst, res in [x for x in ranked if x[1].hot][:HOT_DETAIL_ON_BASELINE]:
-        notifier.send(format_new(lst, res), similar_key=lst.key)
+        notifier.send(_with_budget_note(format_new(lst, res), lst, res, cfg), similar_key=lst.key)
     return True
 
 

@@ -137,8 +137,6 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                     lst = to_listing(item, kind, selectors["base_url"], cfg.bazos_psc)
                     if lst is None or not lst.in_area:
                         continue
-                    if lst.price is not None and lst.price > cfg.price_max:
-                        continue
                     out.append(lst)
             if category_raw == 0:
                 log.warning("Bazoš: kategorie %s nevrátila nic (změna webu?)", category["path"])

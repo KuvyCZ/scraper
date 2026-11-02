@@ -6,6 +6,7 @@ Použití:
   python main.py check      ověří každý zdroj proti živému webu: kolik najde, v jakých obcích;
                             nic neukládá a nic neposílá (použij po nasazení nebo když zdroj hlásí chyby)
   python main.py top        vypíše nejlepší aktuální nabídky z DB
+  python main.py latest [N] nejnovějších N inzerátů znovu oskórovaných proti dnešnímu trhu
   python main.py towns      typická cena za m² v každé sledované obci (z uložených inzerátů)
   python main.py report     pošle tabulku cen po obcích na Telegram hned (jinak chodí sama 1× týdně)
   python main.py test-telegram   pošle zkušební zprávu (ověření tokenu a chat_id)
@@ -18,11 +19,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 from collections import Counter
 
-from flip import export
+from flip import export, latest
 from flip.bot import Bot
 from flip.config import FlipConfig, load_config
 from flip.market import town_averages
@@ -57,6 +59,7 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
     next_due = {s: 0.0 for s in sources}
     bot = Bot(cfg, notifier)
     export.register(bot)            # /data, /status, /help v Telegramu
+    latest.register(bot)            # /latest
     export.announce_update(cfg, notifier)
     log.info("Startuji | zdroje=%s | obce=%s | rozpočet=%s | dry_run=%s",
              sources, watched_towns(), czk(cfg.price_max), cfg.dry_run)
@@ -130,6 +133,16 @@ def check(cfg: FlipConfig) -> int:
     return 0 if all_ok else 1
 
 
+def _budget_ok(row, cfg: FlipConfig) -> bool:
+    """Jako pipeline.within_budget, ale z uloženého řádku."""
+    if not (row["price"] and row["price"] > cfg.price_max):
+        return True
+    median = ((json.loads(row["last_breakdown"] or "{}").get("market") or {}).get("median_ppm2"))
+    if not (median and row["area_m2"] and cfg.over_budget_discount_pct > 0):
+        return False
+    return row["price"] / row["area_m2"] <= median * (1 - cfg.over_budget_discount_pct / 100)
+
+
 def top(cfg: FlipConfig, limit: int = 20) -> int:
     with Store(cfg.db_path) as store:
         rows = store.conn.execute(
@@ -141,7 +154,7 @@ def top(cfg: FlipConfig, limit: int = 20) -> int:
         return 0
     latest = max(r["last_seen"] for r in rows)[:10]
     current = [r for r in rows if r["last_seen"][:10] >= latest      # viděné v posledním dni běhu
-               and not (r["price"] and r["price"] > cfg.price_max)]
+               and _budget_ok(r, cfg)]
     current.sort(key=lambda r: r["last_score"], reverse=True)
     for r in current[:limit]:
         bd = json.loads(r["last_breakdown"] or "{}")
@@ -184,6 +197,12 @@ def main(argv: list[str]) -> int:
         return check(cfg)
     if command == "top":
         return top(cfg)
+    if command == "latest":
+        n = int(argv[2]) if len(argv) > 2 and argv[2].isdigit() else latest.DEFAULT_N
+        with Store(cfg.db_path) as store:
+            text = latest.format_latest(latest.latest_rescored(store, cfg, n), cfg)
+        print(re.sub(r"<[^>]+>", "", text))
+        return 0
     if command == "towns":
         return towns(cfg)
     notifier = Notifier(cfg.telegram_token, cfg.telegram_chat_id, dry_run=cfg.dry_run)

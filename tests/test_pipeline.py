@@ -64,6 +64,17 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len([m for m in self.notifier.sent if "Now watching" in m]), 1)
         self.assertTrue(self.store.baseline_done("sreality"))
 
+    def test_over_budget_only_when_much_cheaper_per_m2_than_town(self):
+        comps = [make(eid=f"c{i}", price=9_600_000, area=200) for i in range(5)]       # 48k/m² v Šumperku
+        self.run_source("sreality", comps)                                              # baseline
+        self.notifier.sent.clear()
+        self.run_source("sreality", comps + [
+            make(eid="bargain", price=6_000_000, area=200, subtype="5+1"),   # 30k/m² = −38 % (medián 48k)
+            make(eid="pricey", price=9_600_000, area=200, subtype="5+1"),    # 48k/m² = jako obec
+        ])
+        self.assertEqual(len(self.notifier.sent), 1)
+        self.assertIn("💸 Over your 5M budget, but 38 % below", self.notifier.sent[0])
+
     def test_out_of_area_and_over_budget_are_stored_but_silent(self):
         self.run_source("sreality", [make(eid="0")])          # baseline
         self.notifier.sent.clear()
