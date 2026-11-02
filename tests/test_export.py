@@ -95,5 +95,55 @@ class TelegramExportTests(unittest.TestCase):
         self.assertIn("Fix &lt;Bazoš&gt;", self.notifier.sent[1])
 
 
+class BackgroundBotTests(unittest.TestCase):
+    def test_get_updates_reaches_telegram_without_crashing(self):
+        # getUpdates posílá Telegramu parametr `timeout` a zároveň potřebuje vlastní HTTP timeout;
+        # dřív se to v Notifier.call() srazilo (TypeError) a celý scraper spadl po prvním průchodu.
+        cfg = config(db_path=os.path.join(tempfile.mkdtemp(), "flip.db"), telegram_chat_id="42", dry_run=False)
+        notifier = FileNotifier()
+        notifier.dry_run = False
+        seen = {}
+
+        def fake_post(url, data=None, timeout=None, **kw):
+            seen.update(url=url, data=data, timeout=timeout)
+            return mock.Mock(status_code=200, json=lambda: {"ok": True, "result": []},
+                             raise_for_status=lambda: None)
+
+        with mock.patch("flip.notifier.httpx.post", fake_post):
+            Bot(cfg, notifier).poll(50)
+        self.assertIn("getUpdates", seen["url"])
+        self.assertEqual(seen["data"]["timeout"], 50)
+        self.assertEqual(seen["timeout"], 60)
+
+    def test_answers_from_its_own_thread(self):
+        import threading
+        cfg = config(db_path=os.path.join(tempfile.mkdtemp(), "flip.db"), telegram_chat_id="42", dry_run=False)
+        notifier = FileNotifier()
+        notifier.dry_run = False
+        answered = threading.Event()
+        updates = [{"ok": True, "result": [{"update_id": 1, **chat_message("/help")}]}]
+
+        def fake_call(method, http_timeout=None, **params):
+            if method == "getUpdates":
+                if updates:
+                    return updates.pop()
+                answered.wait(5)
+                return {"ok": True, "result": []}
+            return {"ok": True}
+
+        def send(text, **kw):
+            notifier.sent.append(text)
+            answered.set()
+            return True
+
+        notifier.call = fake_call
+        notifier.send = send
+        bot = Bot(cfg, notifier)
+        export.register(bot)
+        self.assertIsNotNone(bot.start_background())
+        self.assertTrue(answered.wait(5))
+        self.assertIn("/data", notifier.sent[0])
+
+
 if __name__ == "__main__":
     unittest.main()

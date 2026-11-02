@@ -58,6 +58,7 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
     bot = Bot(cfg, notifier)
     export.register(bot)            # /data, /status, /help v Telegramu
     export.announce_update(cfg, notifier)
+    bot.start_background()          # odpovídá do pár sekund, i během dlouhého běhu zdroje
     log.info("Startuji | zdroje=%s | obce=%s | rozpočet=%s | dry_run=%s",
              sources, watched_towns(), czk(cfg.price_max), cfg.dry_run)
     while True:
@@ -80,8 +81,7 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
         if all(v == float("inf") for v in next_due.values()):
             return
         if not due:
-            # mezi běhy bot odpovídá na tlačítko 🔎 Similar nearby
-            bot.wait(max(1.0, min(next_due.values()) - time.monotonic()))
+            time.sleep(max(1.0, min(next_due.values()) - time.monotonic()))
 
 
 def run_once(cfg: FlipConfig, notifier: Notifier) -> int:

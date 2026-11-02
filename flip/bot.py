@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import statistics
+import threading
 import time
 from datetime import timedelta
 from typing import Any, Callable
@@ -115,7 +116,7 @@ def similar_callback(query: dict, store: Store, cfg: FlipConfig, notifier: Notif
 
 
 class Bot:
-    """Čekání mezi běhy zdrojů, během kterého bot odpovídá na klepnutí."""
+    """Odpovídá na příkazy a klepnutí: ve vlákně (start_background) nebo během wait()."""
 
     def __init__(self, cfg: FlipConfig, notifier: Notifier) -> None:
         self.cfg = cfg
@@ -157,6 +158,24 @@ class Bot:
             if fn := self.commands.get(name):
                 fn(message, store, self.cfg, self.notifier)
 
+    def start_background(self) -> threading.Thread | None:
+        """Poslouchá příkazy ve vlastním vlákně, takže odpoví do pár sekund i během
+        dlouhého běhu zdroje (první průchod Sreality trvá desítky minut)."""
+        if self.notifier.dry_run:
+            return None
+
+        def loop() -> None:
+            while True:
+                try:
+                    self.poll(POLL_TIMEOUT_S)
+                except Exception:  # noqa: BLE001 – vlákno bota nesmí umřít
+                    log.exception("Bot: chyba při čtení příkazů, zkusím znovu")
+                    time.sleep(30)
+
+        thread = threading.Thread(target=loop, name="telegram-bot", daemon=True)
+        thread.start()
+        return thread
+
     def wait(self, seconds: float) -> None:
         deadline = time.monotonic() + seconds
         if self.notifier.dry_run:
@@ -169,7 +188,7 @@ class Bot:
         params: dict[str, object] = {"timeout": timeout, "allowed_updates": '["callback_query", "message"]'}
         if self.offset is not None:
             params["offset"] = self.offset
-        resp = self.notifier.call("getUpdates", timeout=timeout + 10, **params)
+        resp = self.notifier.call("getUpdates", http_timeout=timeout + 10, **params)
         if not resp or not resp.get("ok"):
             time.sleep(min(timeout, 30))     # Telegram nedostupný -> nezahlcuj ho
             return

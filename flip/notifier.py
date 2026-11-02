@@ -198,11 +198,11 @@ class Notifier:
                 return False
         return False
 
-    def call(self, method: str, timeout: float | None = None, **params: object) -> dict | None:
+    def call(self, method: str, http_timeout: float | None = None, **params: object) -> dict | None:
         """Obecné volání Bot API (getUpdates, answerCallbackQuery). None = chyba."""
         try:
             resp = httpx.post(METHOD_URL.format(token=self.token, method=method), data=params,
-                              timeout=timeout or self.timeout)
+                              timeout=http_timeout or self.timeout)
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:  # noqa: BLE001
