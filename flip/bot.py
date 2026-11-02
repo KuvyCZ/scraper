@@ -7,6 +7,10 @@ plocha (±30 % bytu, ±40 % domu), viděné v posledních MARKET_WINDOW_DAYS dne
 Když je jich v obci málo, vezme sledované obce téhož okresu.
 
 Odpovídá jen v nastaveném TELEGRAM_CHAT_ID — cizí klepnutí ignoruje.
+
+Další funkce bota se zapojují přes `Bot.register_command("data", fn)` (zpráva
+"/data") a `Bot.register_callback("prefix:", fn)` — jen JEDEN getUpdates na token,
+dva pollery by si updaty přebíraly (409 Conflict).
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ import sqlite3
 import statistics
 import time
 from datetime import timedelta
+from typing import Any, Callable
 
 from flip.config import FlipConfig
 from flip.market import AREA_BAND, SANE_PPM2, row_condition
@@ -90,15 +95,16 @@ def format_similar(row: sqlite3.Row, where: str | None, similar: list[sqlite3.Ro
     return "\n".join(lines)
 
 
+Handler = Callable[[dict[str, Any], Store, FlipConfig, Notifier], None]
+
+
 def handle_callback(query: dict, store: Store, cfg: FlipConfig, notifier: Notifier) -> None:
-    chat_id = str(((query.get("message") or {}).get("chat") or {}).get("id", ""))
-    notifier.call("answerCallbackQuery", callback_query_id=query.get("id", ""))
-    if chat_id != str(cfg.telegram_chat_id):
-        log.warning("Klepnutí z cizího chatu %s ignoruji", chat_id)
-        return
+    """Výchozí obsluha klepnutí (jen 🔎 Similar nearby) — viz Bot.callbacks."""
+    Bot(cfg, notifier).dispatch({"callback_query": query}, store)
+
+
+def similar_callback(query: dict, store: Store, cfg: FlipConfig, notifier: Notifier) -> None:
     data = query.get("data") or ""
-    if not data.startswith(SIMILAR_PREFIX):
-        return
     source, _, external_id = data[len(SIMILAR_PREFIX):].partition(":")
     row = store.get(source, external_id)
     if row is None:
@@ -115,6 +121,41 @@ class Bot:
         self.cfg = cfg
         self.notifier = notifier
         self.offset: int | None = None
+        self.callbacks: dict[str, Handler] = {SIMILAR_PREFIX: similar_callback}
+        self.commands: dict[str, Handler] = {}
+
+    def register_callback(self, prefix: str, fn: Handler) -> None:
+        """fn(callback_query, store, cfg, notifier) pro callback_data začínající `prefix`."""
+        self.callbacks[prefix] = fn
+
+    def register_command(self, name: str, fn: Handler) -> None:
+        """fn(message, store, cfg, notifier) pro zprávu "/name" z našeho chatu."""
+        self.commands[name.lstrip("/")] = fn
+
+    def _ours(self, chat: dict | None) -> bool:
+        chat_id = str((chat or {}).get("id", ""))
+        if chat_id != str(self.cfg.telegram_chat_id):
+            log.warning("Zpráva/klepnutí z cizího chatu %s ignoruji", chat_id)
+            return False
+        return True
+
+    def dispatch(self, update: dict[str, Any], store: Store) -> None:
+        if query := update.get("callback_query"):
+            self.notifier.call("answerCallbackQuery", callback_query_id=query.get("id", ""))
+            if not self._ours((query.get("message") or {}).get("chat")):
+                return
+            data = query.get("data") or ""
+            for prefix, fn in self.callbacks.items():
+                if data.startswith(prefix):
+                    fn(query, store, self.cfg, self.notifier)
+                    return
+        elif message := update.get("message"):
+            text = (message.get("text") or "").strip()
+            if not text.startswith("/") or not self._ours(message.get("chat")):
+                return
+            name = text[1:].split()[0].split("@")[0].lower() if len(text) > 1 else ""
+            if fn := self.commands.get(name):
+                fn(message, store, self.cfg, self.notifier)
 
     def wait(self, seconds: float) -> None:
         deadline = time.monotonic() + seconds
@@ -125,7 +166,7 @@ class Bot:
             self.poll(min(POLL_TIMEOUT_S, int(left)))
 
     def poll(self, timeout: int) -> None:
-        params: dict[str, object] = {"timeout": timeout, "allowed_updates": '["callback_query"]'}
+        params: dict[str, object] = {"timeout": timeout, "allowed_updates": '["callback_query", "message"]'}
         if self.offset is not None:
             params["offset"] = self.offset
         resp = self.notifier.call("getUpdates", timeout=timeout + 10, **params)
@@ -134,9 +175,8 @@ class Bot:
             return
         for update in resp.get("result") or []:
             self.offset = update["update_id"] + 1
-            if "callback_query" in update:
-                try:
-                    with Store(self.cfg.db_path) as store:
-                        handle_callback(update["callback_query"], store, self.cfg, self.notifier)
-                except Exception:  # noqa: BLE001 – vadné klepnutí nesmí shodit sledování
-                    log.exception("Odpověď na klepnutí selhala")
+            try:
+                with Store(self.cfg.db_path) as store:
+                    self.dispatch(update, store)
+            except Exception:  # noqa: BLE001 – vadné klepnutí nesmí shodit sledování
+                log.exception("Odpověď na klepnutí/příkaz selhala")

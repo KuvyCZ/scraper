@@ -67,6 +67,20 @@ class CallbackTests(unittest.TestCase):
         self.assertIn("no longer", self.notifier.sent[0])
 
 
+class CommandRegistryTests(unittest.TestCase):
+    def test_registered_command_only_from_our_chat(self):
+        notifier = CapturingNotifier()
+        notifier.call = mock.Mock(return_value={"ok": True})
+        b = bot.Bot(config(telegram_chat_id="42"), notifier)
+        got = []
+        b.register_command("data", lambda msg, store, cfg, n: got.append(msg["text"]))
+        store = Store(":memory:")
+        b.dispatch({"message": {"text": "/data@flipbot", "chat": {"id": 42}}}, store)
+        b.dispatch({"message": {"text": "/data", "chat": {"id": 7}}}, store)
+        b.dispatch({"message": {"text": "hello", "chat": {"id": 42}}}, store)
+        self.assertEqual(got, ["/data@flipbot"])
+
+
 class ButtonTests(unittest.TestCase):
     def test_send_adds_button(self):
         n = Notifier("t", "42")
