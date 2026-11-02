@@ -7,19 +7,24 @@ zkusí znovu příští běh, protože se neoznačí jako odeslaná). dry_run je
 from __future__ import annotations
 
 import html
+import json
 import logging
 import time
 
 import httpx
 
+from flip.market import scope_label
 from flip.model import Listing
 from flip.scoring import ScoreResult
 from flip.sources import DISPLAY_NAMES
 from flip.text import RISK_LABELS, TAGGED_HOUSE_SUBTYPES
+from flip.towns import normalize
 
 log = logging.getLogger("flip.notifier")
 
 API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+METHOD_URL = "https://api.telegram.org/bot{token}/{method}"
+SIMILAR_PREFIX = "sim:"           # callback_data tlačítka "🔎 Similar nearby": sim:{source}:{external_id}
 MAX_LEN = 4000  # Telegram limit 4096
 
 
@@ -78,7 +83,7 @@ def _body(lst: Listing, res: ScoreResult) -> list[str]:
     if res.ppm2:
         price += f" · {czk(res.ppm2)}/m²"
         if res.vs_median_pct is not None:
-            where = "your towns" if res.market.scope == "area" else "okres Šumperk"
+            where = scope_label(res.market.scope, lst.town)
             price += f" ({res.vs_median_pct:+.0f} % vs median, {res.market.comps_n} similar in {where})"
     lines.append(price)
 
@@ -94,7 +99,7 @@ def _body(lst: Listing, res: ScoreResult) -> list[str]:
             f"💰 Flip estimate: sells ~{money_short(est.arv)} after reno · reno ~{money_short(est.reno_cost)}"
             f" · costs ~{money_short(est.holding_cost)} → {verdict} <b>{czk_short(est.margin)} ({est.margin_pct:+.0f} %)</b>"
         )
-        where = "your towns" if res.market.arv_scope == "area" else "okres Šumperk"
+        where = scope_label(res.market.arv_scope, lst.town)
         lines.append(f"   <i>from {res.market.arv_n} renovated listings in {where}; asking prices, not sale prices</i>")
     elif res.needs_work:
         lines.append("💰 Flip estimate: not enough renovated listings nearby yet to estimate resale price")
@@ -116,7 +121,11 @@ def _body(lst: Listing, res: ScoreResult) -> list[str]:
         lines.append("❓ size/layout not clearly stated — check the listing")
 
     if lst.locality:
-        lines.append(f"📍 {e(lst.locality)}")
+        # Bazoš píše u inzerátu často "Šumperk", i když PSČ patří jiné obci — ukaž, co platí
+        if lst.town and normalize(lst.town) not in normalize(lst.locality):
+            lines.append(f"📍 {e(lst.town)} (site says: {e(lst.locality)})")
+        else:
+            lines.append(f"📍 {e(lst.locality)}")
     src = link(lst.url, DISPLAY_NAMES.get(lst.source, lst.source))
     if lst.duplicate_sources:
         others = ", ".join(link(u, DISPLAY_NAMES.get(s, s)) for s, u in lst.duplicate_sources)
@@ -162,20 +171,21 @@ class Notifier:
         self.dry_run = dry_run
         self.timeout = timeout
 
-    def send(self, text: str) -> bool:
+    def send(self, text: str, *, similar_key: tuple[str, str] | None = None) -> bool:
+        """`similar_key` = (source, external_id): pod zprávu přidá tlačítko 🔎 Similar nearby."""
         if len(text) > MAX_LEN:
             text = text[: MAX_LEN - 1] + "…"
         if self.dry_run:
             log.info("[dry_run] Telegram:\n%s", text)
             return True
+        data = {"chat_id": self.chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": "true"}
+        if similar_key:
+            callback = f"{SIMILAR_PREFIX}{similar_key[0]}:{similar_key[1]}"[:64]   # limit Telegramu 64 B
+            data["reply_markup"] = json.dumps(
+                {"inline_keyboard": [[{"text": "🔎 Similar nearby", "callback_data": callback}]]})
         for attempt in range(2):
             try:
-                resp = httpx.post(
-                    API_URL.format(token=self.token),
-                    data={"chat_id": self.chat_id, "text": text, "parse_mode": "HTML",
-                          "disable_web_page_preview": "true"},
-                    timeout=self.timeout,
-                )
+                resp = httpx.post(API_URL.format(token=self.token), data=data, timeout=self.timeout)
                 if resp.status_code == 429 and attempt == 0:   # flood limit -> počkej, co Telegram řekne
                     retry_after = (resp.json().get("parameters") or {}).get("retry_after", 5)
                     time.sleep(min(int(retry_after), 60))
@@ -187,6 +197,17 @@ class Notifier:
                 log.error("Telegram selhal: %s", exc)
                 return False
         return False
+
+    def call(self, method: str, timeout: float | None = None, **params: object) -> dict | None:
+        """Obecné volání Bot API (getUpdates, answerCallbackQuery). None = chyba."""
+        try:
+            resp = httpx.post(METHOD_URL.format(token=self.token, method=method), data=params,
+                              timeout=timeout or self.timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Telegram %s selhal: %s", method, exc)
+            return None
 
     def send_failure_warning(self, source: str, failures: int, error: str) -> bool:
         return self.send(

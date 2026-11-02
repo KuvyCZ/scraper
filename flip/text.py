@@ -70,8 +70,18 @@ EXCLUDED_HOUSE_SUBTYPES = {"Chata", "Na klíč"}     # malá chata / novostavba 
 TAGGED_HOUSE_SUBTYPES = {"Chalupa"}                # může být celoroční dům, ale ověř
 
 LAYOUT_RE = re.compile(r"\b(\d)\s*\+\s*(kk|\d)\b", re.IGNORECASE)
-AREA_RE = re.compile(r"(\d{1,4}(?:[.,]\d+)?)\s*m(?:&sup2;|²|2)(?![\w])", re.IGNORECASE)
-LAND_RE = re.compile(r"pozem\w*[^0-9]{0,40}?(\d[\d\s.]{1,8})\s*m(?:&sup2;|²|2)(?![\w])", re.IGNORECASE)
+_M2 = r"(?:m(?:&sup2;|²|2)(?![\w])|㎡|m\.?\s*čtvere[čc]n\w*|metr\w*\s+čtvere[čc]n\w*)"
+AREA_RE = re.compile(r"(\d{1,4}(?:[.,]\d+)?)\s*" + _M2, re.IGNORECASE)
+LAND_RE = re.compile(r"pozem\w*[^0-9]{0,40}?(\d[\d\s.]{1,8})\s*" + _M2, re.IGNORECASE)
+# výslovně pojmenovaná plocha bytu/domu má přednost před první zmínkou "m²"
+LABELLED_AREA_RE = re.compile(
+    r"(?:užitn|podlahov|obytn)\w*\s+ploch\w*[^0-9]{0,20}?(\d{1,4}(?:[.,]\d+)?)\s*" + _M2, re.IGNORECASE,
+)
+# plocha těsně za těmito slovy není plocha bytu/domu ("zahrada 200 m²", "pokoj 24 m²")
+_NOT_LIVING_AREA_KW = (
+    "zahrad", "pozem", "parcel", "sklep", "balkon", "lodzi", "teras", "garaz", "dvur", "pokoj",
+    "kuchyn", "loznic", "koupel", "satn", "puda", "pudni", "zastaven",
+)
 
 
 def _any(keywords: tuple[str, ...], text_norm: str) -> bool:
@@ -123,12 +133,22 @@ def parse_layout(text: str | None) -> str | None:
 
 
 def parse_area(text: str | None) -> float | None:
-    """První plocha v textu, která NENÍ plocha pozemku."""
+    """Plocha bytu/domu z textu: pojmenovaná ("užitná plocha 80 m²"), jinak první
+    zmínka m², která NENÍ pozemek, zahrada, sklep, pokoj apod."""
     if not text:
         return None
+    m = LABELLED_AREA_RE.search(text)
+    if m:
+        value = float(m.group(1).replace(",", "."))
+        if 10 <= value <= 2000:
+            return value
     land_spans = [m.span(1) for m in LAND_RE.finditer(text)]
     for m in AREA_RE.finditer(text):
         if any(start <= m.start(1) < end for start, end in land_spans):
+            continue
+        # jen kus textu před číslem v rámci stejné části věty
+        before = normalize(re.split(r"[,;|.\n]", text[max(0, m.start(1) - 25):m.start(1)])[-1])
+        if any(kw in before for kw in _NOT_LIVING_AREA_KW):
             continue
         value = float(m.group(1).replace(",", "."))
         if 10 <= value <= 2000:
@@ -155,3 +175,12 @@ def parse_price(text: str | None) -> int | None:
         return None
     value = int(digits)
     return value if value >= 10_000 else None  # "1 Kč" / "0 Kč" = cena na dotaz
+
+
+RENTAL_KW = _norm_all(["k pronájmu", "nabízíme pronájem", "pronájem bytu", "pronájem domu", "měsíční nájem",
+                       "nájemné", "kč/měsíc", "kč měsíčně"])
+
+
+def looks_like_rental(text: str | None) -> bool:
+    """Pronájem omylem v kategorii prodej (cena je pak měsíční nájem)."""
+    return bool(text) and _any(RENTAL_KW, normalize(text))

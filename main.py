@@ -1,4 +1,4 @@
-"""main.py — hledač flipů: byty a domy v Šumperku a okolí → Telegram.
+"""main.py — hledač flipů: byty a domy ve větších obcích Olomouckého kraje → Telegram.
 
 Použití:
   python main.py            běží pořád, každý zdroj ve vlastním intervalu (výchozí, Docker)
@@ -6,6 +6,8 @@ Použití:
   python main.py check      ověří každý zdroj proti živému webu: kolik najde, v jakých obcích;
                             nic neukládá a nic neposílá (použij po nasazení nebo když zdroj hlásí chyby)
   python main.py top        vypíše nejlepší aktuální nabídky z DB
+  python main.py towns      typická cena za m² v každé sledované obci (z uložených inzerátů)
+  python main.py report     pošle tabulku cen po obcích na Telegram hned (jinak chodí sama 1× týdně)
   python main.py test-telegram   pošle zkušební zprávu (ověření tokenu a chat_id)
 
 Konfigurace: .env (viz .env.example). Bez TELEGRAM_BOT_TOKEN/CHAT_ID se jen loguje.
@@ -20,9 +22,12 @@ import sys
 import time
 from collections import Counter
 
+from flip.bot import Bot
 from flip.config import FlipConfig, load_config
+from flip.market import town_averages
 from flip.notifier import Notifier, czk, czk_short
 from flip.pipeline import run_source
+from flip.report import report_due, send_town_report
 from flip.sources import DISPLAY_NAMES, SOURCES
 from flip.store import Store
 from flip.towns import watched_towns
@@ -49,6 +54,7 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
     sources = cfg.active_sources
     intervals = {s: cfg.interval_minutes(s) * 60 for s in sources}
     next_due = {s: 0.0 for s in sources}
+    bot = Bot(cfg, notifier)
     log.info("Startuji | zdroje=%s | obce=%s | rozpočet=%s | dry_run=%s",
              sources, watched_towns(), czk(cfg.price_max), cfg.dry_run)
     while True:
@@ -61,10 +67,18 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
             except Exception:  # noqa: BLE001 – smyčka musí přežít cokoliv
                 log.exception("%s: neočekávaná chyba, pokračuji", source)
             next_due[source] = float("inf") if intervals[source] <= 0 else time.monotonic() + intervals[source]
+        if due:
+            try:
+                with Store(cfg.db_path) as store:
+                    if report_due(store, cfg):
+                        send_town_report(store, cfg, notifier)
+            except Exception:  # noqa: BLE001 – tabulka nesmí shodit sledování
+                log.exception("týdenní tabulka selhala, pokračuji")
         if all(v == float("inf") for v in next_due.values()):
             return
         if not due:
-            time.sleep(max(1.0, min(next_due.values()) - time.monotonic()))
+            # mezi běhy bot odpovídá na tlačítko 🔎 Similar nearby
+            bot.wait(max(1.0, min(next_due.values()) - time.monotonic()))
 
 
 def run_once(cfg: FlipConfig, notifier: Notifier) -> int:
@@ -79,7 +93,7 @@ def run_once(cfg: FlipConfig, notifier: Notifier) -> int:
 def check(cfg: FlipConfig) -> int:
     """Živé ověření zdrojů do dočasné paměťové DB — nic neukládá, nic neposílá."""
     cfg.fetch_details = False   # jen seznamy: pár minut místo ~20, na ověření webu to stačí
-    print(f"Checking sources against live sites (towns: {', '.join(watched_towns())}) …")
+    print(f"Checking sources against live sites ({len(watched_towns())} towns in Olomoucký kraj) …")
     print("Quick mode: listing pages only, no detail pages. Takes a few minutes in total.\n")
     all_ok = True
     for source in cfg.active_sources:
@@ -99,7 +113,7 @@ def check(cfg: FlipConfig) -> int:
               f"{len(in_area)} in your towns")
         by = Counter((x.town, x.kind) for x in in_area)
         for (town, kind), n in sorted(by.items()):
-            print(f"      {town:15} {'flats ' if kind == 'byt' else 'houses'} {n}")
+            print(f"      {town:20} {'flats ' if kind == 'byt' else 'houses'} {n}")
         for kind in ("byt", "dum"):
             if cfg.wants_kind(kind) and not any(x.kind == kind for x in result.listings):
                 print(f"   ⚠️  no {'flats' if kind == 'byt' else 'houses'} at all — category path may be wrong")
@@ -136,6 +150,29 @@ def top(cfg: FlipConfig, limit: int = 20) -> int:
     return 0
 
 
+def towns(cfg: FlipConfig) -> int:
+    """Průměr (medián) Kč/m² pro každou obec — s čím se inzeráty srovnávají."""
+    with Store(cfg.db_path) as store:
+        rows = store.market_rows(kind="byt", window_days=cfg.market_window_days, in_area_only=True)
+        rows += store.market_rows(kind="dum", window_days=cfg.market_window_days, in_area_only=True)
+    averages = town_averages(rows)
+    if not averages:
+        print("Not enough listings yet — let it run a few hours first.")
+        return 0
+    for kind, title in (("byt", "FLATS"), ("dum", "HOUSES")):
+        items = [a for a in averages if a.kind == kind]
+        if not items:
+            continue
+        print(f"\n{title} — typical asking price per m² (last {cfg.market_window_days} days)")
+        print(f"   {'town':20} {'listings':>8} {'per m²':>12} {'renovated':>12} {'to renovate':>12}")
+        for a in items:
+            reno = czk(a.renovated_ppm2) if a.renovated_ppm2 else "–"
+            raw = czk(a.needs_reno_ppm2) if a.needs_reno_ppm2 else "–"
+            print(f"   {a.town:20} {a.n:>8} {czk(a.median_ppm2):>12} {reno:>12} {raw:>12}")
+    print("\nTowns with fewer than 3 listings are left out. These are asking prices, not sale prices.")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     setup_logging()
     cfg = load_config()
@@ -144,10 +181,17 @@ def main(argv: list[str]) -> int:
         return check(cfg)
     if command == "top":
         return top(cfg)
+    if command == "towns":
+        return towns(cfg)
     notifier = Notifier(cfg.telegram_token, cfg.telegram_chat_id, dry_run=cfg.dry_run)
     if command == "test-telegram":
         ok = notifier.send("✅ Flip scraper can reach this chat.")
         print("sent ✅" if ok else "failed ❌ (check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
+        return 0 if ok else 1
+    if command == "report":
+        with Store(cfg.db_path) as store:
+            ok = send_town_report(store, cfg, notifier)
+        print("sent ✅" if ok else "nothing sent (not enough listings yet, or Telegram failed)")
         return 0 if ok else 1
     if command == "once":
         return run_once(cfg, notifier)

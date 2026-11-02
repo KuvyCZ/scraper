@@ -17,17 +17,31 @@ def _store_with(*listings) -> Store:
 
 
 class MarketTests(unittest.TestCase):
-    def test_area_first_then_district_fallback(self):
-        area_comps = [make(eid=f"a{i}", price=2_400_000, area=60) for i in range(3)]       # 40k/m² v obcích
-        district = [make(eid=f"d{i}", town=None, price=1_800_000, area=60) for i in range(5)]  # 30k/m² okres
-        store = _store_with(*area_comps, *district)
+    def test_same_town_first_then_okres_then_region(self):
+        town = [make(eid=f"a{i}", price=2_400_000, area=60) for i in range(3)]                     # Šumperk 40k/m²
+        okres = [make(eid=f"z{i}", town="Zábřeh", price=2_100_000, area=60) for i in range(3)]     # 35k/m²
+        region = [make(eid=f"o{i}", town="Olomouc", price=4_800_000, area=60) for i in range(5)]   # 80k/m²
+        store = _store_with(*town, *okres, *region)
         market = MarketData(store.market_rows(kind="byt", window_days=365, in_area_only=False))
         subject = make(eid="x", area=62)
         view = analyze(subject, market, min_comps=3)
-        self.assertEqual(view.scope, "area")
+        self.assertEqual(view.scope, "town")
         self.assertAlmostEqual(view.median_ppm2, 40_000)
-        view4 = analyze(subject, market, min_comps=4)     # v obcích jen 3 -> okres
-        self.assertEqual(view4.scope, "district")
+        view = analyze(subject, market, min_comps=4)      # v obci jen 3 -> sledované obce okresu Šumperk
+        self.assertEqual(view.scope, "okres")
+        self.assertAlmostEqual(view.median_ppm2, 37_500)
+        view = analyze(subject, market, min_comps=7)      # okres jen 6 -> celý kraj
+        self.assertEqual(view.scope, "region")
+
+    def test_town_averages(self):
+        from flip.market import town_averages
+        rows = [make(eid=f"s{i}", price=2_400_000, area=60) for i in range(3)]
+        rows += [make(eid=f"r{i}", price=3_600_000, area=60, condition="Po rekonstrukci") for i in range(3)]
+        rows += [make(eid="lonely", town="Jeseník")]
+        store = _store_with(*rows)
+        avgs = town_averages(store.market_rows(kind="byt", window_days=365, in_area_only=True))
+        self.assertEqual([(a.town, a.n) for a in avgs], [("Šumperk", 6)])     # Jeseník má málo
+        self.assertAlmostEqual(avgs[0].renovated_ppm2, 60_000)
 
     def test_arv_only_from_renovated_and_ignores_own_cluster(self):
         done = [make(eid=f"r{i}", price=3_000_000, area=60, condition="Po rekonstrukci") for i in range(3)]
@@ -48,6 +62,14 @@ class MarketTests(unittest.TestCase):
 
 
 class ScoringTests(unittest.TestCase):
+    def test_cheap_per_m2_alone_is_not_100_or_hot(self):
+        # z NAS: Bazoš 3+1 bez popisu stavu, jen "levné za m²" -> dřív skóre 100 a 🔥
+        lst = make(price=1_200_000, area=60)
+        res = score_listing(lst, MarketView(median_ppm2=40_000, comps_n=8, scope="area"), config())
+        self.assertEqual(res.signals["cena"], 1.0)
+        self.assertLess(res.score, 65)
+        self.assertFalse(res.hot)
+
     def test_cheap_wreck_with_good_margin_is_hot(self):
         lst = make(price=1_500_000, area=60, condition="Před rekonstrukcí", energy_rating="G")
         view = MarketView(median_ppm2=40_000, comps_n=8, scope="area", arv_ppm2=60_000, arv_n=6, arv_scope="area")
@@ -79,7 +101,7 @@ class ScoringTests(unittest.TestCase):
     def test_no_price_signals_never_hot(self):
         lst = make(price=None, condition="Před rekonstrukcí")
         res = score_listing(lst, MarketView(), config())
-        self.assertEqual(res.score, 100)        # jen stav… ale bez cenového signálu
+        self.assertEqual(res.score, 65)         # jen stav (málo dat -> staženo) a bez cenového signálu
         self.assertFalse(res.hot)
 
     def test_price_drop_and_time_on_market(self):
@@ -138,6 +160,23 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(store.cluster_members("sreality:1")), 2)
         # duplicita se nepočítá do mediánů dvakrát
         self.assertEqual(len(store.market_rows(kind="byt", window_days=365, in_area_only=True)), 1)
+
+    def test_old_bazos_towns_without_psc_are_dropped_once(self):
+        import os, tempfile
+        path = os.path.join(tempfile.mkdtemp(), "flip.db")
+        with Store(path) as store:
+            store.conn.execute("PRAGMA user_version = 0")      # databáze z doby před PSČ
+            store.upsert(make(source="bazos", eid="old", town="Šumperk", locality="Šumperk"))
+            store.upsert(make(source="bazos", eid="new", town="Šumperk", locality="Šumperk 787 01"))
+            store.upsert(make(source="sreality", eid="1", town="Šumperk", locality="Šumperk"))
+        with Store(path) as store:
+            self.assertIsNone(store.get("bazos", "old")["town"])
+            self.assertEqual(store.get("bazos", "new")["town"], "Šumperk")
+            self.assertEqual(store.get("sreality", "1")["town"], "Šumperk")
+            # znovu viděný inzerát dostane obec zpět a další start ji už nemaže
+            store.upsert(make(source="bazos", eid="old", town="Šumperk", locality="Šumperk"))
+        with Store(path) as store:
+            self.assertEqual(store.get("bazos", "old")["town"], "Šumperk")
 
     def test_market_window(self):
         store = Store(":memory:")

@@ -15,11 +15,13 @@ class CapturingNotifier(Notifier):
         super().__init__("", "", dry_run=True)
         self.sent: list[str] = []
         self.fail = False
+        self.keys: list[tuple[str, str] | None] = []
 
-    def send(self, text: str) -> bool:
+    def send(self, text: str, *, similar_key=None) -> bool:
         if self.fail:
             return False
         self.sent.append(text)
+        self.keys.append(similar_key)
         return True
 
 
@@ -51,6 +53,16 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(stats.new_sent, 1)
         self.assertEqual(len(self.notifier.sent), 1)
         self.assertIn("Rapotín", self.notifier.sent[0])
+
+    def test_first_run_waits_for_complete_list(self):
+        partial = FetchResult([make(eid="1")], 1, complete=False)
+        with mock.patch.dict(pipeline.SOURCES, {"sreality": SimpleNamespace(fetch_listings=lambda c, k: partial)}):
+            pipeline.run_source("sreality", self.cfg, self.notifier, self.store)
+        self.assertEqual(self.notifier.sent, [])
+        self.assertFalse(self.store.baseline_done("sreality"))
+        self.run_source("sreality", [make(eid="1"), make(eid="2")])
+        self.assertEqual(len([m for m in self.notifier.sent if "Now watching" in m]), 1)
+        self.assertTrue(self.store.baseline_done("sreality"))
 
     def test_out_of_area_and_over_budget_are_stored_but_silent(self):
         self.run_source("sreality", [make(eid="0")])          # baseline

@@ -61,7 +61,10 @@ class FetchResult:
 
     `raw_count` = kolik inzerátů zdroj vůbec rozparsoval (PŘED filtry). Když je 0,
     nejspíš se změnil web (redesign) — to se počítá jako selhání, ne jako "nic nového".
+    `complete` = False, když zdroj část inzerátů odložil na další běh (Sreality: strop
+    detailů). Při prvním běhu se pak shrnutí posílá až s kompletním seznamem.
     """
 
     listings: list[Listing]
     raw_count: int
+    complete: bool = True

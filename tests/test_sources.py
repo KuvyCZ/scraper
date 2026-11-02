@@ -40,7 +40,7 @@ class SrealityTests(unittest.TestCase):
         self.assertIsNone(sreality.normalize_search(plot))
 
     def test_outside_area_kept_as_market_data(self):
-        lst = sreality.normalize_search(self.estate(locality={"city": "Bludov", "district": "Šumperk"}))
+        lst = sreality.normalize_search(self.estate(locality={"city": "Hrabišín", "district": "Šumperk"}))
         self.assertIsNone(lst.town)
 
     def test_detail(self):
@@ -106,8 +106,8 @@ class BazosTests(unittest.TestCase):
         html = self.page(
             {"id": 1, "title": "Prodej bytu 2+1", "desc": "Byt 56 m², k rekonstrukci", "price": "1 650 000 Kč",
              "town": "Šumperk"},
-            {"id": 2, "title": "Prodej RD v Sudkově", "desc": "Dům 130 m2, pozemek 1 100 m2", "price": "2 900 000 Kč",
-             "town": "Sudkov", "psc": "788 21"},
+            {"id": 2, "title": "Prodej RD v Litovli", "desc": "Dům 130 m2, pozemek 1 100 m2", "price": "2 900 000 Kč",
+             "town": "Litovel", "psc": "784 01"},
         )
         items = bazos.parse_page(html, self.sel)
         self.assertEqual(len(items), 2)
@@ -115,7 +115,7 @@ class BazosTests(unittest.TestCase):
         self.assertEqual((flat.town, flat.subtype, flat.area_m2, flat.price, flat.parse_confidence),
                          ("Šumperk", "2+1", 56.0, 1_650_000, "high"))
         house = bazos.to_listing(items[1], "dum", self.sel["base_url"])
-        self.assertEqual((house.town, house.area_m2, house.land_m2), ("Sudkov", 130.0, 1100.0))
+        self.assertEqual((house.town, house.area_m2, house.land_m2), ("Litovel", 130.0, 1100.0))
 
     def test_low_confidence_and_cabin(self):
         items = bazos.parse_page(self.page(
@@ -131,12 +131,12 @@ class BazosTests(unittest.TestCase):
         items = bazos.parse_page(self.page(
             # Bazoš píše "Šumperk", ale PSČ je Vikýřovic -> Vikýřovice
             {"id": 5, "title": "Byt 2+1", "desc": "56 m2", "price": "1 Kč", "town": "Šumperk", "psc": "788 13"},
-            # "Šumperk" s PSČ mimo sledované obce (Zábřeh) -> mimo oblast
-            {"id": 6, "title": "Byt 2+1", "desc": "56 m2", "price": "1 Kč", "town": "Šumperk", "psc": "789 01"},
+            # "Šumperk" s PSČ jiné obce (Bohuslavice) -> mimo oblast
+            {"id": 6, "title": "Byt 2+1", "desc": "56 m2", "price": "1 Kč", "town": "Šumperk", "psc": "789 72"},
             # neznámý název, ale sledované PSČ -> projde
             {"id": 7, "title": "Byt 2+1", "desc": "56 m2", "price": "1 Kč", "town": "Hrabišín", "psc": "78803"},
         ), self.sel)
-        self.assertEqual([i["psc"] for i in items], ["788 13", "789 01", "78803"])
+        self.assertEqual([i["psc"] for i in items], ["788 13", "789 72", "78803"])
         towns = [bazos.to_listing(i, "byt", self.sel["base_url"]).town for i in items]
         self.assertEqual(towns, ["Vikýřovice", None, "Nový Malín"])
         self.assertEqual(bazos.to_listing(items[0], "byt", self.sel["base_url"]).locality, "Šumperk 788 13")
@@ -147,6 +147,8 @@ class BazosTests(unittest.TestCase):
         ), self.sel)
         lst = bazos.to_listing(items[0], "byt", self.sel["base_url"], {"78901": "Šumperk"})
         self.assertEqual(lst.town, "Šumperk")
+        # PSČ 789 01 je Zábřeh, Bazoš ale píše "Šumperk" a 3 číslice nesedí -> mimo
+        self.assertIsNone(bazos.to_listing(items[0], "byt", self.sel["base_url"], {}).town)
         no_psc = dict(items[0], psc="")                            # PSČ nenalezeno -> podle názvu
         self.assertEqual(bazos.to_listing(no_psc, "byt", self.sel["base_url"], {}).town, "Šumperk")
 
@@ -168,7 +170,7 @@ class RealitySumperkTests(unittest.TestCase):
             SUMPERK_BLOCK.format(slug="bytu", id=11, title="Prodej bytu 3+1, 72 m²", address="Žerotínova, Šumperk",
                                  desc="Byt v původním stavu…", price="2 190 000 Kč"),
             SUMPERK_BLOCK.format(slug="domu", id=12, title="Prodej rodinného domu 160 m², pozemek 700 m²",
-                                 address="Králec", desc="", price="Info v RK"),
+                                 address="Holice, Olomouc", desc="", price="Info v RK"),
         ])
         items = reality_sumperk.parse_page(html, self.sel)
         flat = reality_sumperk.to_listing(items[0], "byt", "3+1", self.sel["base_url"])
@@ -176,7 +178,7 @@ class RealitySumperkTests(unittest.TestCase):
                          ("Šumperk", "3+1", 72.0, 2_190_000, "11"))
         house = reality_sumperk.to_listing(items[1], "dum", None, self.sel["base_url"])
         self.assertEqual((house.town, house.area_m2, house.land_m2, house.price),
-                         ("Dolní Studénky", 160.0, 700.0, None))
+                         ("Olomouc", 160.0, 700.0, None))
 
 
 class RobotsTests(unittest.TestCase):
@@ -206,8 +208,8 @@ class SrealityFetchTests(unittest.TestCase):
                     "category_main_cb": {"value": main}, "category_sub_cb": {"name": "2+1" if main == 1 else "Rodinný"},
                     "locality": {"city": city}}
 
-        flats = [estate(i, "Šumperk" if i % 2 else "Bludov") for i in range(150)]
-        houses = [estate(1000, "Sudkov", main=2)]
+        flats = [estate(i, "Šumperk" if i % 2 else "Hrabišín") for i in range(150)]
+        houses = [estate(1000, "Rapotín", main=2)]
         details = []
 
         def fake_get(self, url, params=None):
@@ -224,15 +226,15 @@ class SrealityFetchTests(unittest.TestCase):
         self.assertEqual(len(res.listings), 151)
         self.assertEqual(len(details), 149)                         # 2 známé bez detailu
         self.assertEqual(sum(x.in_area for x in res.listings), 76)
-        sudkov = next(x for x in res.listings if x.external_id == "1000")
-        self.assertEqual((sudkov.kind, sudkov.town, sudkov.area_m2), ("dum", "Sudkov", 55.0))
+        house = next(x for x in res.listings if x.external_id == "1000")
+        self.assertEqual((house.kind, house.town, house.area_m2), ("dum", "Rapotín", 55.0))
 
     def test_detail_cap_defers_rest(self):
         from unittest import mock
         from tests.helpers import config
 
         flats = [{"hash_id": i, "price_czk": 1, "category_main_cb": {"value": 1},
-                  "category_sub_cb": {"name": "2+1"}, "locality": {"city": "Šumperk" if i < 5 else "Bludov"}}
+                  "category_sub_cb": {"name": "2+1"}, "locality": {"city": "Šumperk" if i < 5 else "Hrabišín"}}
                  for i in range(20)]
 
         def fake_get(self, url, params=None):

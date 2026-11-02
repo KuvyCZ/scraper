@@ -21,6 +21,7 @@ from flip.dedup import is_duplicate
 from flip.market import MarketData, analyze
 from flip.model import FetchResult, Listing
 from flip.notifier import Notifier, format_drop, format_new, format_summary_line
+from flip.sanity import clean
 from flip.scoring import ScoreResult, score_listing
 from flip.sources import DISPLAY_NAMES, SOURCES
 from flip.store import Store, cluster_key
@@ -84,9 +85,10 @@ def _score(store: Store, lst: Listing, markets: dict[str, MarketData], cfg: Flip
 def process(result: FetchResult, source: str, store: Store, notifier: Notifier, cfg: FlipConfig) -> RunStats:
     stats = RunStats(source=source, fetched=len(result.listings))
     stats.baseline = not store.baseline_done(source)
+    listings = [lst for lst in map(clean, result.listings) if lst is not None]
 
     # 1) uložit všechno (i mimo oblast = data o trhu), u nových v oblasti hledat duplicity
-    for lst in result.listings:
+    for lst in listings:
         prev, _ = store.upsert(lst)
         if prev is not None:
             store.fill_from_stored(lst)
@@ -101,7 +103,7 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
 
     # 3) skóre + rozhodnutí o zprávě
     baseline_items: list[tuple[Listing, ScoreResult]] = []
-    for lst in result.listings:
+    for lst in listings:
         if lst.in_area:
             stats.in_area += 1
         if not eligible(lst, cfg):
@@ -121,14 +123,14 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
                 stats.duplicates += 1
             if stats.baseline:
                 baseline_items.append((lst, res))
-            elif notifier.send(format_new(lst, res)):
+            elif notifier.send(format_new(lst, res), similar_key=lst.key):
                 store.mark_notified(key, lst.price, res.score)
                 stats.new_sent += 1
             continue
 
         last = done["last_notified_price"]
         if lst.price and last and lst.price <= last * (1 - cfg.price_drop_alert_pct / 100):
-            if notifier.send(format_drop(lst, res, last)):
+            if notifier.send(format_drop(lst, res, last), similar_key=lst.key):
                 store.mark_notified(key, lst.price, res.score)
                 stats.drops_sent += 1
         elif key != cluster_key(*lst.key):
@@ -136,7 +138,11 @@ def process(result: FetchResult, source: str, store: Store, notifier: Notifier, 
 
     # 4) první běh: jedno shrnutí místo záplavy
     if stats.baseline:
-        if _send_baseline(source, baseline_items, store, notifier, cfg):
+        if not result.complete:
+            # část inzerátů ještě čeká na detail -> shrnutí až z úplného seznamu (jinak by
+            # se odložené po dokončení prvního běhu poslaly každý zvlášť)
+            log.info("%s: první běh ještě není kompletní, shrnutí pošlu, až bude", source)
+        elif _send_baseline(source, baseline_items, store, notifier, cfg):
             store.mark_baseline_done(source)
 
     log.info(
@@ -168,7 +174,7 @@ def _send_baseline(
         store.mark_notified(store.cluster_of(*lst.key), lst.price, res.score)
     # 🔥 kusy i s plným detailem, ať nezapadnou v shrnutí
     for lst, res in [x for x in ranked if x[1].hot][:HOT_DETAIL_ON_BASELINE]:
-        notifier.send(format_new(lst, res))
+        notifier.send(format_new(lst, res), similar_key=lst.key)
     return True
 
 

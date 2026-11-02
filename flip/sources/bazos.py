@@ -6,7 +6,8 @@ filtrování. Proto se prochází prostá celostátní kategorie se stránkován
 (`/prodam/byt/20/`), a obec i cena se filtrují až u nás.
 
 Obec se určuje podle PSČ (`cfg.bazos_psc`), ne podle názvu: Bazoš u inzerátu
-občas ukáže "Šumperk" s PSČ jiné obce. Název se použije jen když PSČ chybí.
+občas ukáže "Šumperk" s PSČ jiné obce. Název se použije, jen když PSČ chybí, nebo
+když PSČ v seznamu není, ale sedí prvními 3 číslicemi (velká města mají víc PSČ).
 
 Popisy jsou volný text -> plocha/dispozice/pozemek se čtou regexem. Když něco
 chybí, inzerát STEJNĚ projde (parse_confidence="low"), jen se to ve zprávě
@@ -32,7 +33,7 @@ from flip.config import FlipConfig
 from flip.http import RateLimiter, RobotsChecker, polite_get
 from flip.model import FetchResult, Listing, utc_now_iso
 from flip.text import EXCLUDED_HOUSE_SUBTYPES, house_subtype_from_text, parse_area, parse_land, parse_layout, parse_price
-from flip.towns import DEFAULT_PSC, match_town, match_town_by_psc
+from flip.towns import DEFAULT_PSC, match_town, match_town_by_psc, psc_fits_town
 
 log = logging.getLogger("flip.sources.bazos")
 
@@ -73,9 +74,13 @@ def parse_page(html_text: str, selectors: dict[str, Any]) -> list[dict[str, str]
 
 
 def town_for(item: dict[str, str], psc_map: dict[str, str]) -> str | None:
-    """Sledovaná obec podle PSČ; bez PSČ (změna webu?) záložně podle názvu."""
+    """Sledovaná obec podle PSČ; jinak podle názvu, pokud mu PSČ aspoň zhruba odpovídá."""
     if item.get("psc"):
-        return match_town_by_psc(item["psc"], psc_map)
+        town = match_town_by_psc(item["psc"], psc_map)
+        if town:
+            return town
+        named = match_town(item["location_text"])
+        return named if psc_fits_town(item["psc"], named) else None
     return match_town(item["location_text"])
 
 
@@ -109,6 +114,7 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
     kw = {"robots": RobotsChecker(), "rate_limiter": RateLimiter()}
     out: list[Listing] = []
     raw_count = 0
+    no_psc = 0
 
     with httpx.Client(timeout=20.0, follow_redirects=True) as client:
         for category in selectors["categories"]:
@@ -126,6 +132,7 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                 if not items:
                     break
                 category_raw += len(items)
+                no_psc += sum(1 for item in items if not item.get("psc"))
                 for item in items:
                     lst = to_listing(item, kind, selectors["base_url"], cfg.bazos_psc)
                     if lst is None or not lst.in_area:
@@ -138,4 +145,8 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
             raw_count += category_raw
 
     log.info("Bazoš: %d inzerátů ve sledovaných obcích (z %d prošlých)", len(out), raw_count)
+    if raw_count and no_psc > raw_count / 2:
+        # bez PSČ se obec bere z názvu, a ten na Bazoši lže ("Šumperk" u Hanušovic)
+        log.error("Bazoš: %d z %d inzerátů bez PSČ — změnil se web? Obec se pak bere jen z názvu "
+                  "(zkontroluj psc_re v selectors/bazos.json)", no_psc, raw_count)
     return FetchResult(out, raw_count)

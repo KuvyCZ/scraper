@@ -10,7 +10,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 
-from flip.towns import DEFAULT_PSC, parse_psc_map
+from flip.towns import DEFAULT_PSC, OKRESY, parse_psc_map
 
 log = logging.getLogger("flip.config")
 
@@ -97,8 +97,11 @@ class FlipConfig:
     source_failure_alert_threshold: int = 3
 
     # --- lokalita --- #
-    district_id: int = 44             # Sreality locality_district_id: 44 = okres Šumperk (ověřeno)
-    district_name: str = "Šumperk"    # Realingo: /prodej_reality/Okres_{district_name}/
+    # Sreality locality_region_id: 8 = Olomoucký kraj (NEOVĚŘENO živě; okres Šumperk = district 44 ověřen).
+    # Když `main.py check` ukáže 0 inzerátů ve sledovaných obcích, číslo je špatně.
+    sreality_region_id: int = 8
+    # Realingo: /prodej_reality/Okres_{okres}/ pro každý okres kraje
+    realingo_districts: list[str] = field(default_factory=lambda: list(OKRESY))
     # Bazoš: PSČ -> obec; inzerát projde podle PSČ, ne podle názvu obce (BAZOS_PSC v .env)
     bazos_psc: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_PSC))
 
@@ -116,7 +119,7 @@ class FlipConfig:
     holding_cost_pct: float = 0.05    # poplatky, makléř, úroky, energie po dobu flipu (z ceny + reko)
 
     # --- trh (mediány) --- #
-    market_window_days: int = 365     # z jak starých inzerátů se počítá medián
+    market_window_days: int = 90      # z jak starých inzerátů se počítá medián (prodané po čase vypadnou)
     min_comps: int = 5                # pod tímto vzorkem se cenový signál nepočítá (nehádá se)
 
     # --- notifikace --- #
@@ -124,6 +127,8 @@ class FlipConfig:
     hot_margin_pct: float = 20.0      # nebo když odhad marže >= tolik % -> taky 🔥
     price_drop_alert_pct: float = 3.0  # pokles ceny známého inzerátu o >= % -> zpráva
     baseline_top_n: int = 10          # první běh: místo záplavy jedno shrnutí s top N
+    town_report_days: int = 7         # jak často poslat tabulku cen po obcích (0 = nikdy)
+    town_report_window_days: int = 30  # z inzerátů viděných za posledních N dní
 
     # --- úložiště --- #
     db_path: str = "flip.db"
@@ -171,8 +176,8 @@ def load_config(env_file: str = ".env") -> FlipConfig:
         bazos_max_pages=_get_int("BAZOS_MAX_PAGES", 25),
         reality_sumperk_max_pages=_get_int("REALITY_SUMPERK_MAX_PAGES", 5),
         source_failure_alert_threshold=_get_int("SOURCE_FAILURE_ALERT_THRESHOLD", 3),
-        district_id=_get_int("DISTRICT_ID", 44),
-        district_name=_get("DISTRICT_NAME", "Šumperk"),
+        sreality_region_id=_get_int("SREALITY_REGION_ID", 8),
+        realingo_districts=_get_list("REALINGO_DISTRICTS", list(OKRESY)),
         bazos_psc=parse_psc_map(_get("BAZOS_PSC")),
         price_max=_get_int("PRICE_MAX", 5_000_000),
         area_min=_get_float("AREA_MIN", 0.0),
@@ -183,12 +188,14 @@ def load_config(env_file: str = ".env") -> FlipConfig:
         reno_cost_house_m2=_get_int("RENO_COST_HOUSE_M2", 30_000),
         sale_factor=_get_float("SALE_FACTOR", 0.92),
         holding_cost_pct=_get_float("HOLDING_COST_PCT", 0.05),
-        market_window_days=_get_int("MARKET_WINDOW_DAYS", 365),
+        market_window_days=_get_int("MARKET_WINDOW_DAYS", 90),
         min_comps=_get_int("MIN_COMPS", 5),
         hot_score=_get_int("HOT_SCORE", 65),
         hot_margin_pct=_get_float("HOT_MARGIN_PCT", 20.0),
         price_drop_alert_pct=_get_float("PRICE_DROP_ALERT_PCT", 3.0),
         baseline_top_n=_get_int("BASELINE_TOP_N", 10),
+        town_report_days=_get_int("TOWN_REPORT_DAYS", 7),
+        town_report_window_days=_get_int("TOWN_REPORT_WINDOW_DAYS", 30),
         db_path=_get("DB_PATH", "flip.db"),
     )
     if not cfg.dry_run and not (cfg.telegram_token and cfg.telegram_chat_id):
