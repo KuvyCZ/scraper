@@ -209,6 +209,21 @@ class Notifier:
             log.warning("Telegram %s selhal: %s", method, exc)
             return None
 
+    def send_document(self, filename: str, content: bytes, caption: str = "") -> bool:
+        """Pošle soubor do chatu (sendDocument, max 50 MB). False = chyba (zalogovaná)."""
+        if self.dry_run:
+            log.info("[dry_run] Telegram soubor %s (%d B): %s", filename, len(content), caption)
+            return True
+        try:
+            resp = httpx.post(METHOD_URL.format(token=self.token, method="sendDocument"),
+                              data={"chat_id": self.chat_id, "caption": caption},
+                              files={"document": (filename, content)}, timeout=120)
+            resp.raise_for_status()
+            return True
+        except Exception as exc:  # noqa: BLE001
+            log.error("Telegram sendDocument %s selhal: %s", filename, exc)
+            return False
+
     def send_failure_warning(self, source: str, failures: int, error: str) -> bool:
         return self.send(
             f"⚠️ <b>{e(DISPLAY_NAMES.get(source, source))} failed {failures}× in a row.</b>\n"
