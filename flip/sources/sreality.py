@@ -116,21 +116,30 @@ class _Client:
         self.http.close()
 
 
-def _iter_search(client: _Client, region_id: int, category: int) -> Iterator[dict[str, Any]]:
+def _iter_search(client: _Client, region_id: int, category: int,
+                 state: dict[str, bool] | None = None) -> Iterator[dict[str, Any]]:
+    """Všechny inzeráty kategorie. `state["complete"]` = došlo se až na konec (offset >= total)."""
     offset = 0
+    total = 0
+    if state is not None:
+        state["complete"] = False
     while True:
         data = client.get(SEARCH_URL, {
             "category_main_cb": category, "category_type_cb": 1,
             "locality_region_id": region_id, "limit": 100, "offset": offset,
         })
         results = data.get("results") or []
+        total = (data.get("pagination") or {}).get("total") or total
         if not results:
+            if state is not None:
+                state["complete"] = offset >= total
             return
         yield from results
         offset += len(results)
-        total = (data.get("pagination") or {}).get("total") or 0
         log.info("Sreality: %s %d/%d", "byty" if category == 1 else "domy", offset, total)
         if offset >= total:
+            if state is not None:
+                state["complete"] = True
             return
 
 
@@ -140,9 +149,11 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
     raw_count = 0
     listings: list[Listing] = []
     complete = True
+    full_scan = True
     try:
         for category in categories:
-            for estate in _iter_search(client, cfg.sreality_region_id, category):
+            state: dict[str, bool] = {}
+            for estate in _iter_search(client, cfg.sreality_region_id, category, state):
                 raw_count += 1
                 try:
                     lst = normalize_search(estate)
@@ -151,6 +162,7 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                     continue
                 if lst is not None:
                     listings.append(lst)
+            full_scan &= state.get("complete", False)
 
         # detail jen pro nové, sledované obce první
         todo = sorted((x for x in listings if x.external_id not in known_ids), key=lambda x: not x.in_area)
@@ -178,4 +190,6 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
     if listings and not in_area:
         log.error("Sreality: žádný inzerát ze sledovaných obcí — SREALITY_REGION_ID=%d je nejspíš špatně",
                   cfg.sreality_region_id)
-    return FetchResult(listings, raw_count, complete)
+    # známé inzeráty se vrací vždy (odkládají se jen nové) -> po úplném průchodu
+    # chybí v seznamu jen to, co z webu zmizelo
+    return FetchResult(listings, raw_count, complete, full_scan=full_scan)

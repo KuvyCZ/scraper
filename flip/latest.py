@@ -32,7 +32,7 @@ def _listing(row: sqlite3.Row) -> Listing:
 
 def latest_rescored(store: Store, cfg: FlipConfig, n: int = DEFAULT_N) -> list[tuple[Listing, ScoreResult]]:
     rows = store.conn.execute(
-        """SELECT * FROM listings WHERE town IS NOT NULL AND dup_of IS NULL
+        """SELECT * FROM listings WHERE town IS NOT NULL AND dup_of IS NULL AND gone_at IS NULL
            ORDER BY first_seen DESC LIMIT ?""", (n,),
     ).fetchall()
     markets = {

@@ -5,6 +5,10 @@ Tabulky:
                  rozpočtem — slouží jako data o trhu pro mediány a ARV). `dup_of`
                  ukazuje na kanonický záznam, když jde o stejnou nemovitost z jiného
                  portálu (mediány pak duplicity nepočítají dvakrát).
+                 `gone_at` = kdy inzerát z webu zmizel (nejspíš prodaný nebo stažený);
+                 počítá se jen u zdrojů, které procházejí celou nabídku (FetchResult.full_scan).
+                 `seen_at_start` = 1, když byl inzerát na webu už při spuštění sledování
+                 (první běh zdroje / nově přidané obce) -> "online aspoň N dní", ne "nový".
   price_history  každá ZMĚNA ceny (ne každý běh) -> signál "zlevnilo".
   notified       co už šlo na Telegram, klíčované KANONICKÝM inzerátem shluku ->
                  stejná nemovitost z jiného portálu nepřijde podruhé; drží poslední
@@ -16,14 +20,22 @@ Tabulky:
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
-from flip.model import Listing
+from flip.model import Listing, price_steps
 from flip.sanity import FLAT_AREA_RANGE, HOUSE_AREA_MAX, MIN_LAND_M2, MIN_SALE_PRICE, RENTAL_PRICE_MAX
 from flip.text import looks_like_rental
-from flip.towns import _PSC_RE, DEFAULT_PSC, match_town, match_town_by_psc, normalize_psc, psc_fits_town
+from flip.towns import _PSC_RE, DEFAULT_PSC, match_town, match_town_by_psc, normalize_psc, okres_of, psc_fits_town
+
+# Zdroje, které při každém běhu projdou celou nabídku -> jen u nich má "zmizel z webu" smysl.
+GONE_TRACKED_SOURCES = ("sreality", "realingo", "reality_sumperk")
+GONE_AFTER_HOURS = 48            # chybí aspoň tak dlouho -> zmizel (ne jen výpadek jednoho běhu)
+GONE_MAX_SHARE = 0.30            # víc než 30 % nabídky naráz = chyba webu, ne vlna prodejů
+
+log = logging.getLogger("flip.store")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS listings (
@@ -48,6 +60,8 @@ CREATE TABLE IF NOT EXISTS listings (
     last_breakdown      TEXT,
     first_seen          TEXT NOT NULL,
     last_seen           TEXT NOT NULL,
+    gone_at             TEXT,
+    seen_at_start       INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (source, external_id)
 );
 
@@ -138,6 +152,54 @@ class Store:
             # nové obce = stovky "nových" inzerátů naráz -> místo záplavy zpráv znovu jedno shrnutí
             self.conn.execute("UPDATE source_health SET baseline_done = 0")
             self.conn.execute("PRAGMA user_version = 3")
+        if version < 4:
+            self._add_history_columns()
+            self.conn.execute("PRAGMA user_version = 4")
+
+    def _add_history_columns(self) -> None:
+        """gone_at + seen_at_start pro starší DB. Doplní se potichu (žádné zprávy):
+        co už teď chybí, dostane gone_at = last_seen; co bylo na webu už při spuštění
+        sledování (první den zdroje, první den nové obce/okresu), dostane seen_at_start."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(listings)")}
+        if "gone_at" not in cols:
+            self.conn.execute("ALTER TABLE listings ADD COLUMN gone_at TEXT")
+        if "seen_at_start" not in cols:
+            self.conn.execute("ALTER TABLE listings ADD COLUMN seen_at_start INTEGER NOT NULL DEFAULT 0")
+
+        for source in GONE_TRACKED_SOURCES:
+            row = self.conn.execute("SELECT MAX(last_seen) AS m FROM listings WHERE source = ?", (source,)).fetchone()
+            if row and row["m"]:
+                cutoff = iso(datetime.fromisoformat(row["m"]) - timedelta(hours=GONE_AFTER_HOURS))
+                self.conn.execute(
+                    "UPDATE listings SET gone_at = last_seen WHERE source = ? AND gone_at IS NULL AND last_seen < ?",
+                    (source, cutoff))
+
+        rows = self.conn.execute("SELECT source, external_id, town, first_seen FROM listings").fetchall()
+        groups: dict[tuple[str, str | None], list[datetime]] = {}    # (zdroj, okres) -> první spatření
+        for r in rows:
+            seen = datetime.fromisoformat(r["first_seen"])
+            groups.setdefault((r["source"], None), []).append(seen)
+            if okres := okres_of(r["town"]):
+                groups.setdefault((r["source"], okres), []).append(seen)
+        # začátek sledování okresu = kdy přišla první velká dávka (10. percentil), ne první
+        # zatoulaný inzerát (starý kód občas našel 1 inzerát z Olomouce i v okrese Šumperk)
+        starts = {g: sorted(v)[len(v) // 10] for g, v in groups.items()}
+        source_start = {src: min(v) for (src, o), v in groups.items() if o is None}
+        day = timedelta(days=1)
+        for r in rows:
+            seen = datetime.fromisoformat(r["first_seen"])
+            okres = okres_of(r["town"])
+            if seen < source_start[r["source"]] + day:
+                at_start = True
+            elif okres is not None:
+                at_start = seen < starts[(r["source"], okres)] + day
+            else:
+                # mimo sledované obce okres neznáme: první den kteréhokoli okresu
+                at_start = any(abs(seen - s) < day for (src, o), s in starts.items()
+                               if src == r["source"] and o is not None)
+            if at_start:
+                self.conn.execute("UPDATE listings SET seen_at_start = 1 WHERE source = ? AND external_id = ?",
+                                  (r["source"], r["external_id"]))
 
     def _rematch_towns(self) -> None:
         """Seznam sledovaných obcí se změnil (6 obcí -> větší obce kraje): obec
@@ -209,11 +271,13 @@ class Store:
         rows = self.conn.execute("SELECT external_id FROM listings WHERE source = ?", (source,)).fetchall()
         return {r["external_id"] for r in rows}
 
-    def upsert(self, lst: Listing) -> tuple[sqlite3.Row | None, bool]:
+    def upsert(self, lst: Listing, *, seen_at_start: bool = False) -> tuple[sqlite3.Row | None, bool]:
         """Uloží inzerát. Vrací (předchozí řádek nebo None, změnila se cena?).
 
         Pole, která se tahají jen z detailu (popis, stav, štítek, pozemek, GPS), se
-        při refetchi bez detailu NEPŘEPÍŠOU na NULL (COALESCE).
+        při refetchi bez detailu NEPŘEPÍŠOU na NULL (COALESCE). Inzerát, který byl
+        "zmizelý" a znovu se objevil, je zase online (gone_at = NULL).
+        `seen_at_start` = ukládá se při prvním (baseline) běhu zdroje.
         """
         now = iso(self.now())
         prev = self.get(lst.source, lst.external_id)
@@ -221,11 +285,11 @@ class Store:
             self.conn.execute(
                 """INSERT INTO listings (source, external_id, url, kind, subtype, price, area_m2, land_m2,
                        town, locality, description, building_condition, energy_rating, gps_lat, gps_lon,
-                       parse_confidence, first_seen, last_seen)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       parse_confidence, first_seen, last_seen, seen_at_start)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (lst.source, lst.external_id, lst.url, lst.kind, lst.subtype, lst.price, lst.area_m2,
                  lst.land_m2, lst.town, lst.locality, lst.description, lst.building_condition,
-                 lst.energy_rating, lst.gps_lat, lst.gps_lon, lst.parse_confidence, now, now),
+                 lst.energy_rating, lst.gps_lat, lst.gps_lon, lst.parse_confidence, now, now, int(seen_at_start)),
             )
             self._record_price(lst, now)
             self.conn.commit()
@@ -239,7 +303,7 @@ class Store:
                    building_condition = COALESCE(?, building_condition),
                    energy_rating = COALESCE(?, energy_rating),
                    gps_lat = COALESCE(?, gps_lat), gps_lon = COALESCE(?, gps_lon),
-                   parse_confidence = ?, last_seen = ?
+                   parse_confidence = ?, last_seen = ?, gone_at = NULL
                WHERE source = ? AND external_id = ?""",
             (lst.url, lst.kind, lst.subtype, lst.price, lst.area_m2, lst.land_m2, lst.town, lst.locality,
              lst.description, lst.building_condition, lst.energy_rating, lst.gps_lat, lst.gps_lon,
@@ -250,6 +314,35 @@ class Store:
             self._record_price(lst, now)
         self.conn.commit()
         return prev, price_changed
+
+    def mark_gone(self, source: str, kinds: Iterable[str]) -> int:
+        """Po ÚPLNÉM průchodu zdroje: co v něm chybí aspoň GONE_AFTER_HOURS, z webu zmizelo.
+        Když by to bylo víc než GONE_MAX_SHARE nabídky naráz, je to spíš chyba webu ->
+        nic se neoznačí. Vrací počet nově zmizelých."""
+        kinds = list(kinds)
+        if source not in GONE_TRACKED_SOURCES or not kinds:
+            return 0
+        marks = ",".join("?" * len(kinds))
+        cutoff = iso(self.now() - timedelta(hours=GONE_AFTER_HOURS))
+        online = self.conn.execute(
+            f"SELECT COUNT(*) FROM listings WHERE source = ? AND gone_at IS NULL AND kind IN ({marks})",
+            (source, *kinds)).fetchone()[0]
+        where = f"source = ? AND gone_at IS NULL AND kind IN ({marks}) AND last_seen < ?"
+        params = (source, *kinds, cutoff)
+        n = self.conn.execute(f"SELECT COUNT(*) FROM listings WHERE {where}", params).fetchone()[0]
+        if n == 0:
+            return 0
+        if n > 5 and n > GONE_MAX_SHARE * online:
+            log.warning("%s: %d z %d inzerátů naráz chybí — spíš chyba webu, neoznačuji jako zmizelé",
+                        source, n, online)
+            return 0
+        self.conn.execute(f"UPDATE listings SET gone_at = last_seen WHERE {where}", params)
+        self.conn.commit()
+        return n
+
+    def price_steps(self, source: str, external_id: str) -> list[tuple[int, str]]:
+        """Ceny v čase bez "cena na dotaz" a bez opakování: [(cena, kdy), …]."""
+        return price_steps(self.price_history(source, external_id))
 
     def _record_price(self, lst: Listing, now: str) -> None:
         self.conn.execute(
@@ -359,6 +452,14 @@ class Store:
         if not row or not row["t"]:
             return None, []
         return row["t"], self.conn.execute("SELECT * FROM town_stats WHERE taken_at = ?", (row["t"],)).fetchall()
+
+    def town_stats_dates(self) -> list[str]:
+        """Časy všech uložených týdenních snímků, nejstarší první."""
+        return [r["taken_at"] for r in self.conn.execute(
+            "SELECT DISTINCT taken_at FROM town_stats ORDER BY taken_at")]
+
+    def town_stats_at(self, taken_at: str) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM town_stats WHERE taken_at = ?", (taken_at,)).fetchall()
 
     def save_town_stats(self, taken_at: str, rows: list[tuple[Any, ...]]) -> None:
         """rows: (town, kind, n, median_ppm2, median_price, renovated_ppm2, needs_reno_ppm2)."""

@@ -144,6 +144,7 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
     out: list[Listing] = []
     raw_count = 0
     unknown: Counter[str] = Counter()
+    full_scan = True        # False = některý okres nedošel na konec (strop stránek / chyba stránky)
 
     with httpx.Client(timeout=20.0, follow_redirects=True) as client:
         for district in cfg.realingo_districts:
@@ -151,11 +152,13 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                 url = build_list_url(selectors, district, page)
                 resp = polite_get(client, url, **kw)
                 if resp is None:
+                    full_scan = False
                     break
                 data = parse_next_data(resp.text)
                 items = list_items(data) if data else None
                 if items is None:
                     log.error("Realingo: data stránky nenalezena na %s (redesign? zkontroluj selectors/realingo.json)", url)
+                    full_scan = False
                     break
                 if not items:
                     break
@@ -171,8 +174,10 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                         continue
                     if lst is not None:
                         out.append(lst)
+            else:
+                full_scan = False      # strop REALINGO_MAX_PAGES -> dražší inzeráty jsme neviděli
 
     if unknown:
         log.info("Realingo: neznámé hodnoty (doplň do selectors/realingo.json): %s", dict(unknown.most_common(10)))
     log.info("Realingo: %d inzerátů ve sledovaných obcích (z %d prošlých)", len(out), raw_count)
-    return FetchResult(out, raw_count)
+    return FetchResult(out, raw_count, full_scan=full_scan)

@@ -7,6 +7,8 @@ Použití:
                             nic neukládá a nic neposílá (použij po nasazení nebo když zdroj hlásí chyby)
   python main.py top        vypíše nejlepší aktuální nabídky z DB
   python main.py latest [N] nejnovějších N inzerátů znovu oskórovaných proti dnešnímu trhu
+  python main.py drops [D]  největší zlevnění za posledních D dní (výchozí 7)
+  python main.py stale [D]  nabídky online aspoň D dní (výchozí 60), nejvíc zlevněné první
   python main.py towns      typická cena za m² v každé sledované obci (z uložených inzerátů)
   python main.py report     pošle tabulku cen po obcích na Telegram hned (jinak chodí sama 1× týdně)
   python main.py test-telegram   pošle zkušební zprávu (ověření tokenu a chat_id)
@@ -24,7 +26,7 @@ import sys
 import time
 from collections import Counter
 
-from flip import export, latest
+from flip import export, insights, latest
 from flip.bot import Bot
 from flip.config import FlipConfig, load_config
 from flip.market import town_averages
@@ -60,6 +62,7 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
     bot = Bot(cfg, notifier)
     export.register(bot)            # /data, /status, /help v Telegramu
     latest.register(bot)            # /latest
+    insights.register(bot)          # /drops, /stale
     export.announce_update(cfg, notifier)
     bot.start_background()          # odpovídá do pár sekund, i během dlouhého běhu zdroje
     log.info("Startuji | zdroje=%s | obce=%s | rozpočet=%s | dry_run=%s",
@@ -201,6 +204,13 @@ def main(argv: list[str]) -> int:
         n = int(argv[2]) if len(argv) > 2 and argv[2].isdigit() else latest.DEFAULT_N
         with Store(cfg.db_path) as store:
             text = latest.format_latest(latest.latest_rescored(store, cfg, n), cfg)
+        print(re.sub(r"<[^>]+>", "", text))
+        return 0
+    if command in ("drops", "stale"):
+        default = insights.DROPS_DEFAULT_DAYS if command == "drops" else insights.STALE_DEFAULT_DAYS
+        days = int(argv[2]) if len(argv) > 2 and argv[2].isdigit() else default
+        with Store(cfg.db_path) as store:
+            text = (insights.drops_text if command == "drops" else insights.stale_text)(store, cfg, days)
         print(re.sub(r"<[^>]+>", "", text))
         return 0
     if command == "towns":

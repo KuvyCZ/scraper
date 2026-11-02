@@ -125,7 +125,7 @@ class PipelineTests(unittest.TestCase):
         self.notifier.sent.clear()
         self.run_source("sreality", [make(eid="0"), make(eid="1", price=4_900_000)])
         self.assertEqual(len(self.notifier.sent), 1)
-        self.assertIn("cheaper than when first seen", self.notifier.sent[0])
+        self.assertIn("5.3M → 4.9M (1 cut, −8 %)", self.notifier.sent[0])
 
     def test_failed_telegram_send_is_retried_next_run(self):
         self.run_source("sreality", [make(eid="0")])

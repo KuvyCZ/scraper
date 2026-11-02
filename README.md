@@ -84,6 +84,8 @@ python main.py                    # keep running (each site on its own interval)
 python main.py top                # best current listings from the database
 python main.py towns              # typical price per m² in each town
 python main.py report             # send the weekly town-price table to Telegram now
+python main.py drops 14           # biggest price cuts in the last 14 days
+python main.py stale 60           # listings online 60+ days, most cut first
 ```
 
 ### Synology NAS (Container Manager)
@@ -112,9 +114,23 @@ Write these to the bot (it only answers your own `TELEGRAM_CHAT_ID`):
 
 | Command | What you get back |
 |---|---|
-| `/data` | `listings_<date>.csv` (all listings in your towns, opens in Excel), `town_prices.csv` (weekly prices per town) and `flip_<date>.db` (the full database, e.g. to attach for Claude) |
-| `/status` | how many listings are stored, when each site last ran, which version is running |
+| `/data` | `listings_<date>.csv` (all listings in your towns with first price, cuts, days online and whether they're gone; opens in Excel), `town_prices.csv` (weekly prices per town) and `flip_<date>.db` (the full database, e.g. to attach for Claude) |
+| `/status` | how many listings are stored, price cuts and gone listings in the last 7 days, when each site last ran, which version is running |
+| `/latest` | the newest listings re-scored against today's prices (`/latest 15`) |
+| `/drops` | the biggest price cuts in your towns in the last 7 days, also ones too small for a 📉 message or over budget (`/drops 14`) |
+| `/stale` | listings online 60+ days, most cut first: sellers most likely to take a lower offer (`/stale 30`) |
 | `/help` | the list of commands |
+
+### What the history is used for
+
+- **Gone listings.** Sreality (and Realingo / reality-sumperk.cz when they read their whole
+  offer) see every listing on each run. A listing missing for 2+ days is marked *gone*:
+  most likely sold or withdrawn. Bazoš can't tell this, it only reads the newest pages.
+- **Price story** in every message: `3.79M → 3.55M → 3.45M in 18 days (2 cuts, −9 %)`.
+  Listings that were already online when watching started say "online 28+ days".
+- **Weekly table**: price change vs ~3 months ago (or ~4 weeks, or last week while there is
+  no older table yet), plus a *market speed* table per town: new, gone, price cuts and the
+  typical number of days a listing stays online.
 
 The bot answers between site checks, so during a long run (the first Sreality pass) a reply
 can take a few minutes.
@@ -144,5 +160,7 @@ category codes it doesn't recognise.
 | `flip/store.py` | SQLite: listings, price history, what was sent, source health |
 | `flip/notifier.py` | Telegram messages |
 | `flip/export.py` | `/data`, `/status`, `/help` commands and the "updated" message |
+| `flip/insights.py` | `/drops` and `/stale` from the price history |
+| `flip/report.py` | weekly town-price table and market speed |
 | `tests/` | `python -m unittest discover -s tests -t .` (no extra dependencies) |
 | `legacy/` | the old Olomoucký-kraj monitor, archived and not used |
