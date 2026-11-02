@@ -34,7 +34,7 @@ UPLOAD_LIMIT = 50 * 1024 * 1024    # Bot API limit pro sendDocument
 
 # Sloupce tabulky nabídek v pořadí, v jakém dávají smysl v Excelu.
 CSV_COLUMNS = [
-    "town", "kind", "subtype", "status", "price", "first_price", "price_change_pct", "price_cuts",
+    "code", "town", "kind", "subtype", "status", "price", "first_price", "price_change_pct", "price_cuts",
     "area_m2", "land_m2", "price_per_m2", "vs_town_pct", "flip_profit", "score", "days_online",
     "online_before_watching", "first_seen", "last_seen", "gone_on", "also_on", "url", "source",
     "locality", "condition",
@@ -45,6 +45,11 @@ HELP = {
     "data": "send the listings table (Excel), town prices and the full database",
     "status": "how many listings are stored and when each site last ran",
     "latest": "the newest listings re-scored against today's prices (e.g. /latest 15)",
+    "best": "the best listings still online, re-scored today (e.g. /best 15)",
+    "find": "one listing by its number, with renovated and similar ones nearby (or just send 1234)",
+    "fav": "save a listing to favourites, e.g. /fav 1234 nice street (or tap ⭐ Save)",
+    "favs": "your favourites with their current price",
+    "unfav": "remove a favourite, e.g. /unfav 1234",
     "drops": "the biggest price cuts in your towns (e.g. /drops 14 for the last 14 days)",
     "stale": "listings online a long time, often with cuts: good targets for a lower offer (e.g. /stale 30)",
     "help": "list the commands",
@@ -119,7 +124,7 @@ def listings_csv(conn: sqlite3.Connection, now: datetime | None = None) -> tuple
         median = (breakdown.get("market") or {}).get("median_ppm2")
         margin = (breakdown.get("estimate") or {}).get("margin")
         writer.writerow([_cell(v) for v in (
-            row["town"], "flat" if row["kind"] == "byt" else "house", row["subtype"],
+            row["code"], row["town"], "flat" if row["kind"] == "byt" else "house", row["subtype"],
             listing_status(row, now), row["price"], first_price, change, cuts,
             row["area_m2"], row["land_m2"], round(ppm2) if ppm2 else None,
             round((ppm2 / median - 1) * 100, 1) if ppm2 and median else None, margin, row["last_score"],

@@ -122,7 +122,8 @@ def _fetch_description(client: httpx.Client, url: str, external_id: str, **kw: A
 
 
 def _handle_item(item: dict[str, Any], selectors: dict[str, Any], cfg: FlipConfig, client: httpx.Client,
-                 known_ids: set[str], unknown: Counter[str], kw: dict[str, Any]) -> Listing | None:
+                 known_ids: set[str], unknown: Counter[str], kw: dict[str, Any],
+                 refresh_ids: set[str] = frozenset()) -> Listing | None:
     if item.get("purpose") == "SELL" and item.get("property") not in selectors["property_kind_map"]:
         unknown[f"property={item.get('property')}"] += 1
     lst = normalize_item(item, selectors)
@@ -130,15 +131,16 @@ def _handle_item(item: dict[str, Any], selectors: dict[str, Any], cfg: FlipConfi
         return None
     if lst.kind == "dum" and item.get("category") not in selectors.get("house_category_map", {}):
         unknown[f"house category={item.get('category')}"] += 1
-    if cfg.fetch_details and lst.external_id not in known_ids:
+    if cfg.fetch_details and (lst.external_id not in known_ids or lst.external_id in refresh_ids):
         lst.description = _fetch_description(client, lst.url, lst.external_id, **kw)
+        lst.detail_fetched = lst.description is not None
         # kategorie "rodinný" u Realinga zahrnuje i chaty — popis to prozradí hned na začátku
         if lst.kind == "dum" and house_subtype_from_text((lst.description or "")[:150]) in EXCLUDED_HOUSE_SUBTYPES:
             return None
     return lst
 
 
-def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
+def fetch_listings(cfg: FlipConfig, known_ids: set[str], refresh_ids: set[str] = frozenset()) -> FetchResult:
     selectors = load_selectors()
     kw = {"robots": RobotsChecker(), "rate_limiter": RateLimiter()}
     out: list[Listing] = []
@@ -168,7 +170,7 @@ def fetch_listings(cfg: FlipConfig, known_ids: set[str]) -> FetchResult:
                     if not isinstance(item, dict):
                         continue
                     try:
-                        lst = _handle_item(item, selectors, cfg, client, known_ids, unknown, kw)
+                        lst = _handle_item(item, selectors, cfg, client, known_ids, unknown, kw, refresh_ids)
                     except Exception as exc:  # noqa: BLE001 – jeden vadný inzerát nesmí shodit celý zdroj
                         log.warning("Realingo: inzerát %s přeskočen: %s", item.get("id"), exc)
                         continue

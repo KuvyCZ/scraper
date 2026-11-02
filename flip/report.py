@@ -176,6 +176,28 @@ def format_speed(speeds: list[TownSpeed], since: datetime) -> str | None:
     return "\n".join(lines)
 
 
+def score_check(store: Store, cfg: FlipConfig) -> str | None:
+    """Byly 🔥 nabídky opravdu ty dobré? Jak rychle zmizely 🔥 vs ostatní, o kterých přišla
+    zpráva (zmizelé za posledních 90 dní, aspoň 3 v každé skupině)."""
+    since = iso(store.now() - timedelta(days=SPEED_DAYS_WINDOW))
+    rows = store.conn.execute(
+        """SELECT l.first_seen, l.gone_at, n.score FROM notified n
+           JOIN listings l ON l.source || ':' || l.external_id = n.cluster_key
+           WHERE l.gone_at >= ? AND l.seen_at_start = 0 AND n.score IS NOT NULL""", (since,)).fetchall()
+    hot, rest = [], []
+    for r in rows:
+        days = (datetime.fromisoformat(r["gone_at"]) - datetime.fromisoformat(r["first_seen"])).days
+        (hot if r["score"] >= cfg.hot_score else rest).append(max(0, days))
+    if len(hot) < MIN_GONE_FOR_DAYS or len(rest) < MIN_GONE_FOR_DAYS:
+        return None
+    h, o = statistics.median(hot), statistics.median(rest)
+    verdict = ("so the 🔥 ones really did go faster" if h < o else
+               "so the score isn't picking the fast sellers yet; tell Claude, it may need tuning")
+    return (f"<b>🎯 Score check</b> (listings you were sent that went offline, last 90 days)\n"
+            f"🔥 {cfg.hot_score}+: gone after {h:.0f} days typically ({len(hot)} listings)\n"
+            f"Others: {o:.0f} days ({len(rest)} listings), {verdict}.")
+
+
 def write_csv(path: str, taken_at: str, averages: list[TownAverage]) -> None:
     """Připíše řádky na konec CSV (historie po týdnech). Středník + BOM kvůli českému Excelu."""
     new_file = not os.path.exists(path)
@@ -208,6 +230,8 @@ def send_town_report(store: Store, cfg: FlipConfig, notifier: Notifier) -> bool:
     since = datetime.fromisoformat(last) if last else now - timedelta(days=max(cfg.town_report_days, 7))
     if speed := format_speed(market_speed(store, since), since):
         messages.append(speed)
+    if check := score_check(store, cfg):
+        messages.append(check)
     if not all(notifier.send(m) for m in messages):
         return False   # neuloží se -> příští smyčka to zkusí znovu
     taken_at = iso(store.now())

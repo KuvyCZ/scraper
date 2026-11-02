@@ -26,7 +26,7 @@ class CapturingNotifier(Notifier):
 
 
 def fake_source(listings, raw_count=None):
-    return SimpleNamespace(fetch_listings=lambda cfg, known: FetchResult(
+    return SimpleNamespace(fetch_listings=lambda cfg, known, *refresh: FetchResult(
         list(listings), len(listings) if raw_count is None else raw_count))
 
 
@@ -56,7 +56,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_first_run_waits_for_complete_list(self):
         partial = FetchResult([make(eid="1")], 1, complete=False)
-        with mock.patch.dict(pipeline.SOURCES, {"sreality": SimpleNamespace(fetch_listings=lambda c, k: partial)}):
+        with mock.patch.dict(pipeline.SOURCES, {"sreality": SimpleNamespace(fetch_listings=lambda c, k, *r: partial)}):
             pipeline.run_source("sreality", self.cfg, self.notifier, self.store)
         self.assertEqual(self.notifier.sent, [])
         self.assertFalse(self.store.baseline_done("sreality"))
