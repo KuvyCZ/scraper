@@ -109,7 +109,7 @@ class Store:
     """Použití: `with Store("flip.db") as store: ...`. `now` jde přepsat v testech."""
 
     def __init__(self, path: str = "flip.db") -> None:
-        self.conn = sqlite3.connect(path)
+        self.conn = sqlite3.connect(path, timeout=30)   # bot čte z vlastního vlákna souběžně se scraperem
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self._migrate()
