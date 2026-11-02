@@ -19,5 +19,11 @@ COPY flip/ flip/
 RUN mkdir -p /app/data
 VOLUME ["/app/data"]
 
+# Verzi doplní GitHub Actions při sestavení (po aktualizaci pak přijde do Telegramu „✅ … version …“).
+ARG APP_VERSION=""
+ARG APP_TITLE=""
+ENV APP_VERSION=$APP_VERSION \
+    APP_TITLE=$APP_TITLE
+
 # Výchozí: běží pořád, každý zdroj ve vlastním intervalu. Jednorázově: `python main.py once`.
 CMD ["python", "main.py"]

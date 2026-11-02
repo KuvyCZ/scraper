@@ -1,0 +1,62 @@
+# Po každé změně v `main` otestuje kód a sestaví hotový Docker image do GitHub
+# Container Registry (ghcr.io/kuvycz/scraper:latest). NAS si ho pak sám stáhne
+# (update-on-nas.sh z Plánovače úloh) — žádné ZIPy ani ruční Build.
+name: Build image for the NAS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:       # tlačítko "Run workflow" na GitHubu, kdyby bylo potřeba
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-image
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -t .
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version label
+        id: v
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          echo "version=$(date -u +%Y-%m-%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "title=$(printf '%s' "$MESSAGE" | head -n1 | cut -c1-200)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3      # NAS DS223j je ARM (arm64)
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64,linux/amd64
+          push: true
+          tags: |
+            ghcr.io/kuvycz/scraper:latest
+            ghcr.io/kuvycz/scraper:${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ steps.v.outputs.version }}
+            APP_TITLE=${{ steps.v.outputs.title }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

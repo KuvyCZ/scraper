@@ -86,11 +86,36 @@ python main.py report             # send the weekly town-price table to Telegram
 
 ### Synology NAS (Container Manager)
 
-1. Copy the project to the NAS, e.g. `/docker/flip-scraper`, and create a `data/` folder in it.
-2. Create `.env` from `.env.example` and fill in the Telegram token and chat id.
-3. Container Manager → **Project → Create** → point it at the folder (it finds
-   `docker-compose.yml`) → **Build**. It runs permanently and survives NAS restarts.
-4. Check it works: `docker compose run --rm scraper python main.py check`.
+GitHub builds a ready-made image after every change to `main`
+(`.github/workflows/docker.yml` → `ghcr.io/kuvycz/scraper:latest`, ARM and x86).
+The NAS only downloads it, so there is no ZIP upload and no local Build.
+
+1. In File Station create `docker/flip-scraper` with an empty `data/` folder inside, and put
+   `docker-compose.yml`, `update-on-nas.sh` and `.env` (from `.env.example`, with the
+   Telegram token and chat id filled in) into it.
+2. Container Manager → **Project → Create** → point it at the folder → it pulls the image and starts.
+   It runs permanently and survives NAS restarts.
+3. Control Panel → **Task Scheduler** → Create → Scheduled Task → User-defined script,
+   user `root`, daily, script `sh /volume1/docker/flip-scraper/update-on-nas.sh`.
+   It downloads a new version when there is one and restarts the scraper with it
+   (your data stays). To update right away: select the task → **Run**.
+   After each update the bot says "✅ Scraper is now running version …".
+
+The GitHub package has to be **public** once, so the NAS can download it without a password:
+GitHub → your profile → Packages → `scraper` → Package settings → Change visibility → Public.
+
+### Getting the data: Telegram commands
+
+Write these to the bot (it only answers your own `TELEGRAM_CHAT_ID`):
+
+| Command | What you get back |
+|---|---|
+| `/data` | `listings_<date>.csv` (all listings in your towns, opens in Excel), `town_prices.csv` (weekly prices per town) and `flip_<date>.db` (the full database, e.g. to attach for Claude) |
+| `/status` | how many listings are stored, when each site last ran, which version is running |
+| `/help` | the list of commands |
+
+The bot answers between site checks, so during a long run (the first Sreality pass) a reply
+can take a few minutes.
 
 The first Sreality run fetches details for the whole okres (~10 min). After that it only
 fetches new listings and is quick.
@@ -116,5 +141,6 @@ category codes it doesn't recognise.
 | `flip/text.py` | reading condition, risks and house type from listing text |
 | `flip/store.py` | SQLite: listings, price history, what was sent, source health |
 | `flip/notifier.py` | Telegram messages |
+| `flip/export.py` | `/data`, `/status`, `/help` commands and the "updated" message |
 | `tests/` | `python -m unittest discover -s tests -t .` (no extra dependencies) |
 | `legacy/` | the old Olomoucký-kraj monitor, archived and not used |
