@@ -7,8 +7,10 @@
 
 services:
   scraper:
-    build: .
-    image: flip-scraper:latest
+    # Hotový image z GitHubu (sestaví ho .github/workflows/docker.yml po každé změně).
+    # Aktualizace: update-on-nas.sh (Plánovač úloh). Vlastní sestavení z kódu místo toho:
+    #   docker build -t ghcr.io/kuvycz/scraper:latest .
+    image: ghcr.io/kuvycz/scraper:latest
     container_name: flip-scraper
     env_file: .env
     environment:

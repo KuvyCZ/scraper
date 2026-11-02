@@ -15,4 +15,4 @@ DOCKER=/usr/local/bin/docker
   --env-file .env \
   -e DB_PATH=data/flip.db \
   -v "$(pwd)/data:/app/data" \
-  flip-scraper:latest python main.py once
+  ghcr.io/kuvycz/scraper:latest python main.py once

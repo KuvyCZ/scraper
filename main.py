@@ -22,6 +22,7 @@ import sys
 import time
 from collections import Counter
 
+from flip import export
 from flip.bot import Bot
 from flip.config import FlipConfig, load_config
 from flip.market import town_averages
@@ -55,6 +56,8 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
     intervals = {s: cfg.interval_minutes(s) * 60 for s in sources}
     next_due = {s: 0.0 for s in sources}
     bot = Bot(cfg, notifier)
+    export.register(bot)            # /data, /status, /help v Telegramu
+    export.announce_update(cfg, notifier)
     log.info("Startuji | zdroje=%s | obce=%s | rozpočet=%s | dry_run=%s",
              sources, watched_towns(), czk(cfg.price_max), cfg.dry_run)
     while True:
