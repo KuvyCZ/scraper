@@ -218,12 +218,11 @@ def format_drop(lst: Listing, res: ScoreResult, old_price: int, *, other_site: b
 
 def format_gone(row: Mapping[str, Any], steps: list[tuple[int, str]], days: int | None,
                 listed_before_start: bool, score: int | None, hot_score: int, *,
-                code: int | None = None, favorite: bool = False) -> str:
-    """🏁 inzerát, o kterém přišla zpráva (nebo oblíbený), zmizel z webu (nejspíš prodaný)."""
+                code: int | None = None) -> str:
+    """🏁 inzerát, o kterém přišla zpráva, zmizel z webu (nejspíš prodaný). Oblíbené: format_favorite_sold."""
     kind = describe_kind(SimpleNamespace(kind=row["kind"], subtype=row["subtype"]))
     age = "" if days is None else f" after {days}{'+' if listed_before_start else ''} day{'s' if days != 1 else ''}"
-    star = "⭐ Favourite " if favorite else ""
-    lines = [f"🏁 <b>{star}Gone{age}</b> · {e(kind)} · {e(row['town'])}{code_tag(code)}"]
+    lines = [f"🏁 <b>Gone{age}</b> · {e(kind)} · {e(row['town'])}{code_tag(code)}"]
     price = f"Last price {czk(row['price'])}" if row["price"] else "Last price on request"
     if story := price_story(steps):
         price += f" ({story})"
@@ -231,6 +230,59 @@ def format_gone(row: Mapping[str, Any], steps: list[tuple[int, str]], days: int 
     if score is not None:
         lines.append(f"You got it as {score}/100{' 🔥' if score >= hot_score else ''}")
     lines.append("Most likely sold or withdrawn. — " + link(row["url"], DISPLAY_NAMES.get(row["source"], row["source"])))
+    return "\n".join(lines)
+
+
+def _short_date(value: str | None) -> str | None:
+    try:
+        d = datetime.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+    return f"{d.day} {d.strftime('%b')}" if d else None
+
+
+def format_favorite_sold(row: Mapping[str, Any], steps: list[tuple[int, str]], *, first_seen: str | None,
+                         days: int | None, listed_before_start: bool,
+                         typical: tuple[float, int, str | None] | None = None,
+                         code: int | None = None, note: str | None = None) -> str:
+    """⭐🏁 oblíbená nemovitost zmizela z webu -> nejspíš prodaná: která, za kolik a jak rychle."""
+    kind = describe_kind(SimpleNamespace(kind=row["kind"], subtype=row["subtype"]))
+    what = [e(kind)]
+    if row["area_m2"]:
+        what.append(f"{row['area_m2']:g} m²")
+    what.append(e(row["town"] or "?"))
+    lines = ["⭐🏁 <b>Your favourite is gone, probably sold</b>", " · ".join(what) + code_tag(code)]
+
+    span = " → ".join(d for d in (_short_date(first_seen), _short_date(row["gone_at"])) if d)
+    span = f" (online {span})" if span else ""
+    if days is None:
+        speed = "⏱ Not sure how long it was online"
+    elif listed_before_start:
+        speed = (f"⏱ Online at least {days} day{'s' if days != 1 else ''}{span}; it was already listed "
+                 "when the scraper started watching, so the real time is longer")
+    else:
+        speed = f"⏱ Sold in {days} day{'s' if days != 1 else ''}{span}"
+        if typical:
+            usual, n, town = typical
+            where = f"in {e(town)}" if town else "in your towns"
+            things = "flats" if row["kind"] == "byt" else "houses"
+            if days < usual * 0.8:
+                verdict = "faster than usual"
+            elif days > usual * 1.2:
+                verdict = "slower than usual"
+            else:
+                verdict = "about usual"
+            speed += f", {verdict}: {things} {where} typically go in {usual:.0f} days ({n} sold)"
+    lines.append(speed)
+
+    price = f"💰 Last price {czk(row['price'])}" if row["price"] else "💰 Last price on request"
+    if story := price_story(steps):
+        price += f" ({story})"
+    lines.append(price)
+    if note:
+        lines.append(f"📝 Your note: <i>{e(note)}</i>")
+    lines.append("🔗 " + link(row["url"], DISPLAY_NAMES.get(row["source"], row["source"]))
+                 + " <i>(the page may already be gone)</i>")
     return "\n".join(lines)
 
 

@@ -13,7 +13,8 @@ Tabulky:
                  DETAIL_REFRESH_DAYS se u sledovaných obcí přečte znovu (prodejce připíše "sleva").
                  `code` = krátké číslo inzerátu pro Telegram ("/find 1234", "/fav 1234"); zpráva
                  ukazuje číslo kanonického inzerátu shluku.
-  favorites      oblíbené nemovitosti (klíč shluku) — zpráva při KAŽDÉ změně ceny a při zmizení.
+  favorites      oblíbené nemovitosti (klíč shluku) — zpráva při KAŽDÉ změně ceny a při zmizení;
+                 `checked_at` = kdy se naposledy přímo kontrolovala stránka inzerátu.
   price_history  každá ZMĚNA ceny (ne každý běh) -> signál "zlevnilo".
   notified       co už šlo na Telegram, klíčované KANONICKÝM inzerátem shluku ->
                  stejná nemovitost z jiného portálu nepřijde podruhé; drží poslední
@@ -27,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
@@ -101,7 +103,8 @@ CREATE TABLE IF NOT EXISTS source_health (
 CREATE TABLE IF NOT EXISTS favorites (
     cluster_key TEXT PRIMARY KEY,
     added_at    TEXT NOT NULL,
-    note        TEXT
+    note        TEXT,
+    checked_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS town_stats (
@@ -189,6 +192,11 @@ class Store:
             self.conn.executemany("UPDATE listings SET code = ? WHERE source = ? AND external_id = ?",
                                   [(start + i + 1, r["source"], r["external_id"]) for i, r in enumerate(rows)])
             self.conn.execute("PRAGMA user_version = 6")
+        if version < 7:
+            cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(favorites)")}
+            if "checked_at" not in cols:
+                self.conn.execute("ALTER TABLE favorites ADD COLUMN checked_at TEXT")
+            self.conn.execute("PRAGMA user_version = 7")
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_listings_code ON listings (code)")
 
     def _add_history_columns(self) -> None:
@@ -496,6 +504,56 @@ class Store:
 
     def favorites(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM favorites ORDER BY added_at").fetchall()
+
+    def favorites_to_check(self, hours: float) -> list[sqlite3.Row]:
+        """Oblíbené, jejichž stránka se naposledy kontrolovala před víc než N hodinami."""
+        cutoff = iso(self.now() - timedelta(hours=hours))
+        return self.conn.execute(
+            "SELECT * FROM favorites WHERE checked_at IS NULL OR checked_at < ? ORDER BY COALESCE(checked_at, '')",
+            (cutoff,)).fetchall()
+
+    def mark_favorite_checked(self, key: str) -> None:
+        self.conn.execute("UPDATE favorites SET checked_at = ? WHERE cluster_key = ?", (iso(self.now()), key))
+        self.conn.commit()
+
+    def mark_listing_gone(self, source: str, external_id: str) -> sqlite3.Row | None:
+        """Stránka inzerátu už neexistuje -> zmizel (gone_at = naposledy viděn)."""
+        self.conn.execute("UPDATE listings SET gone_at = last_seen WHERE source = ? AND external_id = ? "
+                          "AND gone_at IS NULL", (source, external_id))
+        self.conn.commit()
+        return self.get(source, external_id)
+
+    def typical_days_online(self, kind: str, town: str | None, *, days: int = 180, min_n: int = 3,
+                            exclude: str | None = None) -> tuple[float, int, str | None] | None:
+        """Medián dní od prvního spatření do zmizení (jen inzeráty viděné od začátku).
+        Nejdřív ve stejné obci; když je jich tam málo, ve všech sledovaných obcích.
+        `exclude` = klíč shluku, který se nepočítá (oblíbená sama). Vrací (dny, počet,
+        obec nebo None = všechny obce)."""
+        since = iso(self.now() - timedelta(days=days))
+        marks = ",".join("?" * len(GONE_TRACKED_SOURCES))
+        rows = self.conn.execute(
+            f"""SELECT town, first_seen, gone_at FROM listings
+                WHERE kind = ? AND gone_at >= ? AND dup_of IS NULL AND seen_at_start = 0
+                  AND town IS NOT NULL AND source IN ({marks})
+                  AND source || ':' || external_id IS NOT ?""",
+            (kind, since, *GONE_TRACKED_SOURCES, exclude)).fetchall()
+
+        def days_of(rs: list[sqlite3.Row]) -> list[int]:
+            out = []
+            for r in rs:
+                try:
+                    out.append(max(0, (datetime.fromisoformat(r["gone_at"]) - datetime.fromisoformat(r["first_seen"])).days))
+                except (TypeError, ValueError):
+                    pass
+            return out
+
+        same_town = days_of([r for r in rows if r["town"] == town]) if town else []
+        if len(same_town) >= min_n:
+            return statistics.median(same_town), len(same_town), town
+        everywhere = days_of(rows)
+        if len(everywhere) >= min_n:
+            return statistics.median(everywhere), len(everywhere), None
+        return None
 
     def cluster_members(self, key: str) -> list[sqlite3.Row]:
         source, _, external_id = key.partition(":")

@@ -112,7 +112,8 @@ class FavoriteTests(Base):
         self.assertIn("⭐ <b>Favourite · #1: 7 000 000 Kč → 6 900 000 Kč (−1 %)", self.notifier.sent[0])
         self.at(days=4)
         self.run_src(others)
-        self.assertIn("⭐ Favourite Gone after 1+ day", self.notifier.sent[-1])
+        self.assertIn("Your favourite is gone, probably sold", self.notifier.sent[-1])
+        self.assertIn("Online at least 1 day", self.notifier.sent[-1])   # byl tam už při startu
 
 
 class GoneNoteTests(Base):

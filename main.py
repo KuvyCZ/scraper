@@ -33,6 +33,7 @@ from flip.bot import Bot
 from flip.config import FlipConfig, load_config
 from flip.market import town_averages
 from flip.notifier import Notifier, czk, czk_short
+from flip.favcheck import check_favorites
 from flip.pipeline import run_source
 from flip.report import report_due, send_town_report
 from flip.sources import DISPLAY_NAMES, SOURCES
@@ -87,6 +88,11 @@ def run_forever(cfg: FlipConfig, notifier: Notifier) -> None:
                         send_town_report(store, cfg, notifier)
             except Exception:  # noqa: BLE001 – tabulka nesmí shodit sledování
                 log.exception("týdenní tabulka selhala, pokračuji")
+            try:
+                with Store(cfg.db_path) as store:
+                    check_favorites(store, notifier, cfg)
+            except Exception:  # noqa: BLE001 – kontrola oblíbených nesmí shodit sledování
+                log.exception("kontrola oblíbených selhala, pokračuji")
         if all(v == float("inf") for v in next_due.values()):
             return
         if not due:
@@ -99,6 +105,10 @@ def run_once(cfg: FlipConfig, notifier: Notifier) -> int:
         for source in cfg.active_sources:
             stats = run_source(source, cfg, notifier, store)
             failed += stats.error is not None
+        try:
+            check_favorites(store, notifier, cfg)
+        except Exception:  # noqa: BLE001
+            log.exception("kontrola oblíbených selhala")
     return 1 if failed == len(cfg.active_sources) else 0
 
 
