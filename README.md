@@ -136,8 +136,13 @@ Every listing has a short number (`#1234`) in messages, `/drops`, `/stale`, `/be
   most likely sold or withdrawn. Bazoš can't tell this, it only reads the newest pages.
 - **Price story** in every message: `3.79M → 3.55M → 3.45M in 18 days (2 cuts, −9 %)`.
   Listings that were already online when watching started say "online 28+ days".
-- **🏁 Gone note**: when a listing you were sent (or a favourite) disappears and isn't on another
+- **🏁 Gone note**: when a listing you were sent disappears and isn't on another
   site either, one line: how long it was online and its last price.
+- **⭐🏁 Favourite sold**: when a favourite disappears you get a fuller message: which listing
+  (type, m², town, #number, your note), last price and price story, how many days it was online
+  and whether that was faster or slower than similar listings in that town. Bazoš and capped
+  Realingo can't tell from their lists that a listing is gone, so a favourite none of the sites
+  has shown for 2 days gets its page opened directly (at most twice a day); a missing page counts as gone.
 - **Fairer comparisons**: listings that went offline within 60 days (most likely sold) count 1.5×,
   listings sitting 120+ days count 0.5×. Houses are compared with houses on similar land first.
 - **Measured haggling**: once 30+ listings watched from the start have gone, the profit estimate uses
@@ -182,6 +187,7 @@ category codes it doesn't recognise.
 | `flip/export.py` | `/data`, `/status`, `/help` commands and the "updated" message |
 | `flip/insights.py` | `/drops` and `/stale` from the price history |
 | `flip/lookup.py` | `/find`, `/best`, favourites (`/fav`, `/favs`, `/unfav`, ⭐ Save) |
+| `flip/favcheck.py` | ⭐🏁 "favourite sold" message + direct page check for favourites |
 | `flip/report.py` | weekly town-price table and market speed |
 | `tests/` | `python -m unittest discover -s tests -t .` (no extra dependencies) |
 | `legacy/` | the old Olomoucký-kraj monitor, archived and not used |

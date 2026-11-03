@@ -21,6 +21,7 @@ from datetime import datetime
 
 from flip.config import FlipConfig
 from flip.dedup import is_duplicate
+from flip.favcheck import send_favorite_sold
 from flip.market import MarketData, analyze
 from flip.model import FetchResult, Listing
 from flip.notifier import (Notifier, format_drop, format_favorite_change, format_gone, format_new,
@@ -87,12 +88,15 @@ def load_markets(store: Store, cfg: FlipConfig) -> dict[str, MarketData]:
 
 def _report_gone(store: Store, notifier: Notifier, cfg: FlipConfig, rows: list) -> None:
     """🏁 krátká zpráva, když zmizí nemovitost, o které už přišla zpráva — jen jednou
-    a jen když není k vidění ani na jiném webu."""
+    a jen když není k vidění ani na jiném webu. Oblíbená dostane podrobnější ⭐🏁."""
     for row in rows:
         key = store.cluster_of(row["source"], row["external_id"])
         sent = store.notified(key)
         favorite = store.is_favorite(key)
         if (sent is None and not favorite) or store.cluster_still_online(key, (row["source"], row["external_id"])):
+            continue
+        if favorite:
+            send_favorite_sold(store, notifier, key, row)
             continue
         members = store.cluster_members(key)
         earliest = min(members, key=lambda m: m["first_seen"])
@@ -102,7 +106,7 @@ def _report_gone(store: Store, notifier: Notifier, cfg: FlipConfig, rows: list) 
             days = None
         notifier.send(format_gone(row, store.price_steps(row["source"], row["external_id"]), days,
                                   bool(earliest["seen_at_start"]), sent["score"] if sent else None, cfg.hot_score,
-                                  code=store.code_of(key), favorite=favorite))
+                                  code=store.code_of(key)))
 
 
 def _link_duplicate(store: Store, lst: Listing) -> None:
